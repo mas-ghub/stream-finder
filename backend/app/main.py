@@ -1137,6 +1137,16 @@ async def search(
             seen[key] = r
     results = list(seen.values())
 
+    # Cap the pool at the requested page size BEFORE the (expensive) provider
+    # lookup: we only need provider data for the titles the user will actually
+    # see. A 1000-result browse therefore costs ~100 provider calls, not ~1500.
+    limit = min(max(1, q.limit), settings.max_results)
+    # RT / min-rating sorts need ratings to be meaningful, so keep the wider pool
+    # for those; every other path is pre-capped to the page.
+    rt_sort = q.sort in ("rt_critic", "rt_audience")
+    if not (q.channels or rt_sort):
+        results = _sort(results, q)[:limit]
+
     # Channel filter needs provider data, so attach it (in parallel) BEFORE the
     # other filters run. Otherwise the RT/min-rating filters (which drop titles
     # with no rating yet) would shrink the pool before the channel filter sees it.
@@ -1144,25 +1154,25 @@ async def search(
         if pid:
             _progress(pid, phase="providers", done=0, total=len(results))
         await _gather_bounded([_resolve_tmdb_id(r) for r in results if not r.tmdb_id])
-        # Higher concurrency for the (rare) channel filter: ~1000 provider lookups.
-        # The cache makes repeat selections instant; this just makes the first one snappier.
         await _gather_bounded([_attach_providers(r) for r in results if r.tmdb_id], 100,
                               progress_key=pid, progress_phase="providers", progress_total=len(results))
-    # Drop titles that don't match the selected services (client sees only these).
-    if q.channels:
-        results = [r for r in results if {p.get("channel") for p in r.platforms} & set(q.channels)]
-
-    # If the user sorts by a RT metric, the whole pool needs RT first so the sort is
-    # meaningful (otherwise only the last page would have it). Cap the RT pass to the
-    # first 200 titles to keep it fast; the cache makes re-sorts free.
-    pool = _apply_filters(results, q)
-    if settings.rt_enabled and q.sort in ("rt_critic", "rt_audience"):
-        if pid:
-            _progress(pid, phase="ratings", done=0, total=min(len(pool), 200))
-        await _gather_bounded([_attach_rt(r) for r in pool[:200] if r.title], 10,
-                              progress_key=pid, progress_phase="ratings", progress_total=min(len(pool), 200))
-    ordered = _sort(pool, q)
-    limit = min(max(1, q.limit), settings.max_results)
+    if rt_sort or q.min_rt or q.min_rating:
+        # RT / min-rating filtering needs rating data: RT is attached to the whole
+        # pool first (capped at 200 for speed; the cache makes re-sorts free), then
+        # every filter (incl. the channel filter) runs against the fresh values.
+        pool = results
+        if settings.rt_enabled and (q.min_rt or rt_sort):
+            if pid:
+                _progress(pid, phase="ratings", done=0, total=min(len(pool), 200))
+            await _gather_bounded([_attach_rt(r) for r in pool[:200] if r.title], 10,
+                                  progress_key=pid, progress_phase="ratings", progress_total=min(len(pool), 200))
+        pool = _apply_filters(pool, q)
+        ordered = _sort(pool, q)
+    else:
+        # Everything else (service filter, mood, year, genre, text) is pre-filtered
+        # and provider-checked, so a single filter pass + sort is exact.
+        pool = _apply_filters(results, q)
+        ordered = _sort(pool, q)
     filtered = ordered[:limit]
     if pid:
         _progress(pid, phase="finishing", done=0, total=len(filtered))
