@@ -292,7 +292,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.45';
+const APP_VERSION = '1.46';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false };
@@ -469,7 +469,9 @@ async function doSearch(){
   if(state.minRating) p.set('min_rating', state.minRating);
   if(state.minRt) p.set('min_rt', state.minRt);
   if(myCh.length) myCh.forEach(c=>p.append('channel', c));
-  if(myCh.length) p.set('fetch_all', 'true');
+  // Wider pool whenever the user is filtering by their services (browse or mood) so
+  // the provider check has enough to keep; a plain text search stays fast.
+  if(myCh.length && !state.q) p.set('fetch_all', 'true');
   // "where=true" asks the backend to return provider data for every result so we
   // can filter/annotate on the client. Widens the pool so filters have enough.
   const where = state.streamOnly || state.freeOnly || myCh.length>0;
@@ -481,8 +483,6 @@ async function doSearch(){
     // (mirrors the client's Settings → Your subscriptions).
     getHousehold().forEach(c=>p.append('household', c));
   }
-  if(channelActive() || myCh.length || state.yearMin || state.yearMax || state.streamOnly) p.set('fetch_all', 'true');
-  if(state.limit) p.set('limit', state.limit);
   const hd=tmdbHeaders();
   // Live progress: give the backend an id; poll it while the search runs so the
   // UI can show "pulling N of M…" instead of an infinite spinner.
@@ -766,6 +766,7 @@ function render(spinner){
   $('#ymax')?.addEventListener('change',e=>{state.yearMax=e.target.value;doSearch();});
   $('#sort')?.addEventListener('change',e=>{state.sort=e.target.value;doSearch();});
   $('#maxResults')?.addEventListener('change',e=>{state.limit=parseInt(e.target.value)||100;setLimit(state.limit);doSearch();});
+  $('#maxResults').value = String(state.limit);
   $('#gear')?.addEventListener('click',openSettings);
   $('#bannerkey')?.addEventListener('click',openSettings);
   // channel picker (always visible; pick any services to filter results)

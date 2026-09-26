@@ -1091,7 +1091,8 @@ async def search(
             # UK-origin pool only for UK free-to-air services; subscription services
             # are global, so no origin filter (it would drop most foreign titles).
             oc = "GB" if q.channels and set(q.channels) <= UK_ONLY else None
-            max_t = (1000 if q.channels else (200 if q.where else 120)) // len(dks)
+            pool = 3000 if q.fetch_all else (1000 if q.channels else (200 if q.where else 120))
+            max_t = pool // len(dks)
             for dk in dks:
                 tasks.append(("tmdb", dk, _tmdb_discover(dk, q.genres, year_min, year_max, max_t, oc, q.channels, pid)))
         if not tmdb_only:
@@ -1335,4 +1336,4 @@ if __name__ == "__main__":
     import os
     import uvicorn
     host = os.environ.get("SF_HOST", "0.0.0.0")  # 0.0.0.0 = reachable on your network
-    uvicorn.run(app, host=host, port=int(os.environ.get("SF_PORT", "8030")))
+    uvicorn.run(app, host=host, port=int(os.environ.get("SF_PORT") or os.environ.get("PORT") or "8030"))
