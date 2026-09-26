@@ -4,7 +4,7 @@
    TMDB/RT data); this just keeps the UI itself available and fast. */
 // Bump on every app change so installed PWAs pick up the new index.html (a stale
 // cached index is the usual "my phone still shows the old build" cause).
-const CACHE = 'sf-shell-v18';
+const CACHE = 'sf-shell-v19';
 // Relative paths so the shell also caches when deployed under a repo subdir
 // (GitHub Pages: /stream-finder/), while still working at the origin root.
 const SHELL = ['./', './manifest.webmanifest', './icon.svg', './sw.js'];
