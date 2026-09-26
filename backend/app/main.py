@@ -1296,30 +1296,7 @@ FRONTEND_DIR = FRONTEND.parent
 
 import httpx, time
 
-@app.get("/api/keys-raw")
-async def keys_raw():
-    return {"tmdb_key_set": bool(settings.tmdb_api_key),
-            "tmdb_key_len": len(settings.tmdb_api_key),
-            "tmdb_key_prefix": (settings.tmdb_api_key or "")[:6],
-            "v4_set": bool(settings.tmdb_v4_token),
-            "env_var": bool(os.environ.get("SF_TMDB_API_KEY"))}
 
-@app.get("/api/diag-out")
-async def diag_out():
-    out = {}
-    for name, url in [
-        ("tmdb", "https://api.themoviedb.org/3/configuration"),
-        ("tvmaze", "https://api.tvmaze.com/shows/1"),
-        ("rotten", "https://www.rottentomatoes.com/"),
-    ]:
-        t0 = time.time()
-        try:
-            async with httpx.AsyncClient(timeout=8) as c:
-                r = await c.get(url)
-            out[name] = f"{r.status_code} {int((time.time()-t0)*1000)}ms"
-        except Exception as e:
-            out[name] = f"ERR {type(e).__name__}"
-    return out
 
 @app.get("/")
 async def index():

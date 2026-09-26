@@ -204,7 +204,7 @@ window.addEventListener('unhandledrejection', e => {
 // GitHub Pages page can fetch it (Safari blocks https→http "mixed content").
 const MAC_LAN = 'https://192.168.0.59:8443';
 const MAC_TS  = 'https://marks-macbook-pro.tail0003aa.ts.net:10000';
-const HF_API  = "https://abcdefghlmnop-stream-finder-api.hf.space"; // placeholder for now — swap in the Render URL once it is live (backend candidates below)
+const RENDER_API = "https://stream-finder-api.onrender.com";  // cloud backend (free tier: sleeps 15 min idle, ~60s wake)
 const TAILNET_HOST = 'marks-macbook-pro.tail0003aa.ts.net';
 function onMac(){
   return location.protocol.startsWith('http') && (
@@ -218,7 +218,7 @@ function backendCandidates(){
   const stored = localStorage.getItem('sf_backend');
   if(stored) c.push(stored);                        // last one that worked
   if(onMac()) c.push('');                           // served from the Mac itself
-  else { c.push(MAC_LAN); c.push(MAC_TS); c.push(HF_API); }  // home Wi‑Fi, then Tailscale, then cloud placeholder
+  else { c.push(MAC_LAN); c.push(MAC_TS); c.push(RENDER_API); }  // home Wi‑Fi, then Tailscale (Mac must be on), then the Render cloud (works even when the Mac is off)
   return c.filter((v, i) => c.indexOf(v) === i);   // dedupe, keep order
 }
 // Try each candidate (bounded) until one answers, then remember it. Returns the
