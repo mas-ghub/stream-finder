@@ -1,0 +1,1083 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="theme-color" content="#e50914" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="StreamFinder" />
+<title>Stream Finder — one-stop what-to-watch</title>
+<link rel="icon" href="./icon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="./icon.svg" />
+<link rel="manifest" href="./manifest.webmanifest" />
+<script>
+// Head trap: records the very first error (incl. SyntaxError that halts the app
+// script) so the page can show a copy-able popup instead of a blank screen.
+window.__headErr = null;
+window.addEventListener('error', function(e){
+  if(!window.__headErr){
+    window.__headErr = (e.message||'Unknown error') + (e.lineno?(' (line '+e.lineno+')'):'');
+  }
+}, true);
+</script>
+<script>
+// Apply theme before paint to avoid a flash. ?theme=light|dark overrides and
+// persists; otherwise the stored choice, else the OS preference.
+(function(){try{var q=new URLSearchParams(location.search).get('theme');var t=q||(localStorage.getItem('sf_theme')||(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'));if(q)localStorage.setItem('sf_theme',q);document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();
+</script>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: { extend: {
+    colors: {
+      ink:'var(--c-ink)', panel:'var(--c-panel)', panel2:'var(--c-panel2)', line:'var(--c-line)',
+      onfg:'var(--c-onfg)', onsub:'var(--c-onsub)', onmute:'var(--c-onmute)',
+      accent:'#e50914', gold:'#f5c518', popcorn:'#50fa9d', ok:'#16a34a',
+    },
+    fontFamily: { display:['Inter','system-ui','sans-serif'] },
+  }}
+}
+</script>
+<style>
+  :root, [data-theme="dark"]{
+    --c-ink:#05070d; --c-panel:#0d1320; --c-panel2:#111a2c; --c-line:rgba(255,255,255,.08);
+    --c-onfg:#fff; --c-onsub:rgba(255,255,255,.72); --c-onmute:rgba(255,255,255,.5); --c-grad:#14203b;
+    --field-bg:rgba(0,0,0,.3); --chip-bg:rgba(255,255,255,.14); --chip-line:rgba(255,255,255,.12);
+    --card-grad:#141a2b; --card-grad2:#0b0f1a; --scrollthumb:#26324a; --hover:rgba(255,255,255,.06);
+  }
+  [data-theme="light"]{
+    --c-ink:#f4f6fb; --c-panel:#ffffff; --c-panel2:#eef1f8; --c-line:rgba(15,23,42,.12);
+    --c-onfg:#0f172a; --c-onsub:#334155; --c-onmute:#475569; --c-grad:#e8eefc;
+    --field-bg:rgba(15,23,42,.04); --chip-bg:rgba(15,23,42,.07); --chip-line:rgba(15,23,42,.16);
+    --card-grad:#1b2436; --card-grad2:#0e1320; --scrollthumb:#cbd5e1; --hover:rgba(15,23,42,.05);
+  }
+  html,body{height:100%;overscroll-behavior-y:none;}
+  html{background:var(--c-ink);}
+  body{background:radial-gradient(1200px 600px at 15% -10%, var(--c-grad) 0%, var(--c-ink) 55%);color:var(--c-onfg);transition:background .3s ease,color .3s ease;}
+  #app,#app>header,#app>section,#app>.mt-5{background:transparent;}
+  #app{background-color:var(--c-ink);}
+  .card-poster{background-size:cover;background-position:center top;transition:transform .25s ease, box-shadow .25s ease;}
+  .card:hover .card-poster{transform:scale(1.05);box-shadow:0 20px 50px rgba(0,0,0,.5);}
+  .bg-accent,.bg-accent:hover,.hover\:bg-red-700:hover{color:#fff !important;}
+  .chip{border:1px solid var(--chip-line);background:transparent;color:var(--c-onfg);}
+  .chip:hover{background:var(--hover);}
+  .chip.active{background:linear-gradient(135deg,#e50914,#8b0a3c);border-color:transparent;color:#fff;}
+  /* selected = bright green (success/"you have this"). Red is reserved for alerts. */
+  .chip.seld{background:#16a34a;border-color:rgba(255,255,255,.85);color:#fff;font-weight:700;box-shadow:0 0 0 2px rgba(34,197,94,.55);}
+  [data-theme="light"] .chip.seld{background:#15803d;border-color:rgba(21,128,61,.9);color:#fff;}
+  .field{background:var(--field-bg);}
+  .hoverable:hover{background:var(--hover);}
+  ::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:var(--scrollthumb);border-radius:8px}
+  .fade{animation:fade .4s ease} @keyframes fade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  .spin{animation:spin 1s linear infinite} @keyframes spin{to{transform:rotate(360deg)}}
+  /* Skeleton shimmer for loading cards */
+  .shimmer{background:linear-gradient(100deg,var(--c-panel2) 30%,var(--shimmer-hi) 50%,var(--c-panel2) 70%);background-size:200% 100%;animation:shimmer 1.4s ease-in-out infinite;}
+  @keyframes shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
+  :root,[data-theme="dark"]{--shimmer-hi:rgba(255,255,255,.06);}
+  [data-theme="light"]{--shimmer-hi:rgba(15,23,42,.09);}
+  /* Indeterminate loading bar under the header */
+  .loadbar{position:relative;overflow:hidden;height:3px;border-radius:99px;background:var(--c-line);}
+  .loadbar::after{content:"";position:absolute;inset:0;width:38%;border-radius:99px;background:linear-gradient(90deg,transparent,#e50914 50%,transparent);animation:slide 1.1s cubic-bezier(.6,0,.4,1) infinite;}
+  @keyframes slide{from{transform:translateX(-120%)}to{transform:translateX(320%)}}
+</style>
+</head>
+<body class="font-display">
+<div id="app" class="min-h-full max-w-[1400px] mx-auto px-4 md:px-8 pb-24"></div>
+<div id="modal"></div>
+<div id="toast" class="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] hidden"></div>
+
+<script>
+// Global error trap — turns ugly console errors (including SyntaxError, which
+// would otherwise leave a blank page) into a friendly popup with a copy button.
+window.__errCount = 0;
+window.showErr = function(msg, extra, kind){
+  if(++window.__errCount > 1) return;              // only show the first
+  const el = document.getElementById('app'); if(!el) return;
+  const isNet = kind === 'network' || /couldn't reach|failed to fetch|load failed|unreachable|network error|internet error|failed to load/i.test(String(msg));
+  const perm = isNet && ((window.__diag && (window.__diag.blocked || window.__diag.steps.some(s => /network-error/.test(s.status))))
+    || (/permission|local network|blocked|not allowed|private network/i.test(String(msg)) && (typeof isLocalAddr === 'function' && isLocalAddr(API))));
+  const icon = perm ? '🔒' : '⚠️';
+  const title = perm ? 'Your browser is blocking local network access'
+             : isNet ? "Couldn't reach the app's data"
+                     : 'Something went wrong';
+  let body = '';
+  if(perm){
+    const local = (typeof MAC_LAN !== 'undefined') ? MAC_LAN : '';
+    const check = (typeof checkUrl === 'function') ? checkUrl() : '';
+    body = 'The data for this app lives on a device on your home network (the family Mac). '
+      + 'For privacy, browsers like Chrome stop a public website from reaching local-network devices '
+      + 'unless you allow it — so you may be seeing this even though the Mac is on.<br><br>'
+      + '<b>One-time fix for this site:</b> click the <b>address bar → the lock / tune icon</b> → '
+      + '<b>Site settings</b> → <b>Local network</b> → <b>Allow</b>, then reload. '
+      + (check ? 'Or open <a href="' + check + '" target="_blank" class="underline text-white">this check page</a> which will ask for the permission.<br><br>' : '')
+      + (onMac()
+        ? 'On this Mac the app usually just works — tap <b>Reload</b>.<br><br>'
+        : 'If you&#39;re <i>not</i> on the home Wi-Fi (or the Mac is asleep): the app can&#39;t reach its data — ')
+      + 'open <a href="' + (typeof LAN_URL === 'undefined' ? '' : LAN_URL()) + '" class="underline text-white">' + esc(LAN_URL()) + '</a> directly — on a device on the home Wi&#8209;Fi it needs no permission at all.';
+  } else if(isNet){
+    body = 'The app&#39;s data lives on a free always‑on server (Hugging Face Space). It can take ~30&#8211;60s to wake up after a long idle — give it a moment and tap <b>Retry</b>. '
+      + 'If it still fails, check your internet connection, or open the app on the family Mac: <code>./status.sh</code> for the local address.';
+  } else {
+    body = 'The app hit an error while loading. Try a hard refresh (Cmd+Shift+R). If it keeps happening, copy the details below.';
+  }
+  el.innerHTML = '<div class="min-h-[70vh] flex items-center justify-center">'
+    + '<div class="max-w-lg w-full rounded-2xl border ' + (perm ? 'border-amber-400/50' : 'border-red-500/40') + ' bg-[#12151d] p-6">'
+    + '<div class="text-3xl mb-2">' + icon + '</div>'
+    + '<h2 class="text-xl font-bold text-white">' + title + '</h2>'
+    + '<p class="text-white/80 text-sm mt-1 mb-4">' + body + '</p>'
+    + (extra ? '<pre id="errMsg" class="text-xs bg-black/50 border border-line rounded-lg p-3 whitespace-pre-wrap break-words max-h-40 overflow-auto text-red-200"></pre>' : '')
+    + '<div class="flex flex-wrap gap-2 mt-4">'
+    + (perm ? '<button id="allowNet" class="bg-amber-500 hover:bg-amber-400 text-black text-sm font-semibold px-4 py-2 rounded-xl">🔓 Allow local network access</button>' : '')
+    + (extra ? '<button id="copyErr" class="bg-red-600 hover:bg-red-500 text-white text-sm font-semibold px-4 py-2 rounded-xl">Copy error</button>' : '')
+    + '<button id="retryErr" class="bg-white/10 hover:bg-white/15 text-white/80 text-sm px-4 py-2 rounded-xl">Reload</button>'
+    + '</div></div></div>';
+  if(extra) document.getElementById('errMsg').textContent = msg + '\n\n' + extra;
+  if(extra) document.getElementById('copyErr').onclick = () => {
+    navigator.clipboard.writeText(document.getElementById('errMsg').textContent)
+      .then(()=>{ document.getElementById('copyErr').textContent='Copied ✓'; setTimeout(()=>{ document.getElementById('copyErr').textContent='Copy error'; },1500); })
+      .catch(()=>{});
+  };
+  document.getElementById('retryErr').onclick = ()=>location.reload();
+  const allow = document.getElementById('allowNet');
+  if(allow) allow.onclick = allowLocalNetwork;
+  sendDiag(String(msg).slice(0,600));
+};
+// Ask the browser to allow local-network access from this site (the permission
+// that gates a public page fetching the family Mac). User-gesture driven.
+async function allowLocalNetwork(){
+  let ok = false;
+  try{
+    if(navigator.permissions && navigator.permissions.query){
+      const perms = await navigator.permissions.query({name:'local-network'});
+      if(perms && perms.request){
+        const s = await perms.request().catch(()=>null);
+        ok = !!(s && s.state === 'granted');
+      }
+    }
+  }catch(e){/* not supported or rejected — fall through to manual help */}
+  if(ok){
+    // Permission granted: re-resolve now (no reload needed), else reload so a
+    // stale in-memory state can't linger.
+    const again = await probeCandidates(backendCandidates());
+    if(window.__diag && window.__diag.resolved){ API = again; window.location.reload(); return; }
+  }
+  window.location.reload();
+  alert('Allow didn\u2019t go through automatically.\n\nDo it manually: address bar → lock / tune icon → Site settings → Local network → Allow.\n\n(Or open the check page from the link above.)');
+}
+// Ship diagnostics to the Mac so the developer can read the real failure. Uses the
+// home-Wi‑Fi backend (never the failed one, which is unreachable by definition).
+function sendDiag(err){
+  const hd = (typeof tmdbHeaders==='function') ? tmdbHeaders() : {};
+  const body = Object.assign({err: String(err||'').slice(0,600), page: location.href,
+    api: (typeof API!=='undefined'?API:''), ua: navigator.userAgent}, window.__diag||{});
+  try{ fetch(MAC_LAN + '/api/diag', {method:'POST', headers:hd, body: JSON.stringify(body)}).catch(()=>{}); }catch(e){}
+}
+window.addEventListener('error', e => {
+  const loc = e.filename ? ` at ${e.filename}:${e.lineno}` : '';
+  window.showErr(`${e.message}${loc}`, e.error ? String(e.error.stack||'') : '');
+});
+window.addEventListener('unhandledrejection', e => {
+  window.showErr(`Promise rejected: ${e.reason && (e.reason.message||e.reason)}`, e.reason ? (e.reason.stack||'') : '');
+});
+</script>
+
+<script>
+// Backend base URL.
+//  - Served by the backend itself (port 8030 / localhost) -> same-origin ('').
+//  - Otherwise (file://, or the public GitHub Pages copy) -> a stored backend, or
+//    the local Mac backend. Override with ?backend=http://host:port (also persists)
+//    so the static Pages copy can point at your Mac for live data.
+// Where live data comes from, by default:
+//  - On the Mac itself (served from :8030/localhost) -> same-origin ('').
+//  - Anywhere else (the public GitHub Pages copy, any phone) -> the Tailscale
+//    address. It's reachable from ANYWHERE on the internet (home, mobile data,
+//    office, cafe) as long as the Mac is on, so the family needs no setup beyond
+//    having the Tailscale app signed in. Override with ?backend= or Settings.
+// Where live data comes from. The GitHub Pages site is public (no install); it just
+// needs to find a reachable backend. Candidates are tried in order and the first that
+// answers is remembered, so a phone self-heals: if it was pointed at a dead backend
+// (e.g. an old Tailscale address) it falls through to the working home-Wi-Fi one.
+// Home Wi‑Fi: the Mac over **HTTPS** (8443). Must be https so a phone on the secure
+// GitHub Pages page can fetch it (Safari blocks https→http "mixed content").
+const MAC_LAN = 'https://192.168.0.59:8443';
+const MAC_TS  = 'https://marks-macbook-pro.tail0003aa.ts.net:10000';
+const HF_API  = 'https://abcdefghlmnop-stream-finder-api.hf.space';
+const TAILNET_HOST = 'marks-macbook-pro.tail0003aa.ts.net';
+function onMac(){
+  return location.protocol.startsWith('http') && (
+    (location.hostname === '127.0.0.1' || location.hostname === 'localhost') ||
+    (location.hostname === TAILNET_HOST));
+}
+function backendCandidates(){
+  const c = [];
+  const b = location.search ? new URLSearchParams(location.search).get('backend') : null;
+  if(b) c.push(b);                                  // explicit ?backend= wins
+  const stored = localStorage.getItem('sf_backend');
+  if(stored) c.push(stored);                        // last one that worked
+  if(onMac()) c.push('');                           // served from the Mac itself
+  else { c.push(HF_API); c.push(MAC_LAN); c.push(MAC_TS); }  // always-on HF Space, then home Wi‑Fi, then Tailscale
+  return c.filter((v, i) => c.indexOf(v) === i);   // dedupe, keep order
+}
+// Try each candidate (bounded) until one answers, then remember it. Returns the
+// working base URL, or the most-recently-tried one (to report in the error).
+async function resolveBackend(){
+  if(onMac()) return '';
+  return probeCandidates(backendCandidates());
+}
+async function probeCandidates(cands){
+  window.__diag = {t0:Date.now(), page:location.href, ua:navigator.userAgent,
+    net:(navigator.connection ? {effective:navigator.connection.effectiveType, type:navigator.connection.type} : null), steps:[], blocked:false};
+  for(const c of cands){
+    const t0 = Date.now();
+    let status = 'network-error';
+    try{
+      const ctrl = AbortSignal.timeout ? AbortSignal.timeout(5000) : null;
+      const r = await fetch(c + '/api/meta', {headers: tmdbHeaders(), signal: ctrl});
+      status = 'http:' + r.status;
+      if(r.ok){
+        if(!new URLSearchParams(location.search).get('backend')){ try{ localStorage.setItem('sf_backend', c); }catch(e){} }
+        window.__diag.resolved = c; return c;
+      }
+      // A 404 = wrong path / not the app (e.g. a stale address) -> try the next.
+      if(r.status === 404) continue;
+      window.__diag.resolved = c; return c; // some real backend answered -> use it
+    }catch(e){
+      status = (e && e.name === 'TimeoutError') ? 'timeout' : 'network-error';
+      if(e && e.name === 'TypeError' && c) window.__diag.blocked = true;
+    }
+    window.__diag.steps.push({backend:c, status, ms:Date.now()-t0});
+  }
+  window.__diag.resolved = null;
+  // Blocked reaching the home-Wi-Fi backend? Try to unlock it with the
+  // local-network permission (Chrome/Safari). NEVER let this throw: if the
+  // permission API is unsupported or the query rejects (Safari throws
+  // TypeError on unknown feature names), boot must still continue and show
+  // the normal result/error — a rejected promise here would kill the whole app.
+  try{
+    if(localNetPermissionNeeded() && navigator.permissions && navigator.permissions.query){
+      let p = null;
+      try{ p = await navigator.permissions.query({name:'local-network'}); }catch(e){ p = null; }
+      if(p && p.request && (p.state === 'denied' || p.state === 'prompt')){
+        const s = await p.request().catch(()=>null);
+        if(s && s.state === 'granted'){
+          const again = await probeCandidates(backendCandidates());
+          if(window.__diag && window.__diag.resolved) return again;
+        }
+      }
+    }
+  }catch(e){/* permission flow failed — fall through; the error screen explains */}
+  return cands[0] || MAC_LAN;  // none worked; return the top candidate to report
+}
+// Newer Chrome/Safari block a PUBLIC site (like the GitHub Pages copy) from
+// fetching a device on your LOCAL network unless the user allows it for that
+// site. That shows up as a failed fetch (TypeError) even when the Mac server is
+// fine and running. A plain "come home" message never explains that.
+const isLocalAddr = c => !!c && /^(https?:)?\/\//.test(c) && /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|127\.|localhost)/.test(c.replace(/^https?:\/\//,'').split('/')[0]);
+function localNetPermissionNeeded(){
+  if(!window.__diag || !window.__diag.blocked) return false;
+  const cands = window.__diag.steps.map(s => s.backend);
+  return cands.some(isLocalAddr) || isLocalAddr(API) || isLocalAddr(localStorage.getItem('sf_backend') || '');
+}
+// Helper page that asks for the local-network permission in a user gesture, then
+// returns you to the app. Lives next to index.html (served by the backend AND
+// by the Pages deploy).
+const checkUrl = () => onMac() ? new URL('check', location.href).href : new URL('check.html', location.href).href;
+const LAN_URL = () => MAC_LAN; // direct address (also needs the Mac on + same Wi-Fi)
+let API = onMac() ? '' : HF_API;   // initial guess; boot() refines it via resolveBackend()
+const $ = (s, r=document)=>r.querySelector(s);
+const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+// Bump when you change the app — shown (faintly) top-right so you know you're on the
+// latest after a reload. Keep it short.
+const APP_VERSION = '1.44';
+
+let META = { moods:[], genres:[], sources:[], channels:[] };
+let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false };
+// "My services" is the default lens on first load (all of them, or none → no browse
+// pool). Toggling off, Reset, or a text/mood search all set this to false.
+let myServicesOn = true;
+// Channels to filter by: the lens = the user's saved pick, or ALL their subscribed
+// services when they haven't picked (so nothing has to be selected by hand). Genres,
+// years, ratings etc. combine with it; a text search bypasses it.
+function lensChannels(){
+  if(!myServicesOn || state.q) return state.channels;
+  const saved=getChannels();
+  return saved.length ? saved : subscribedChannels().map(c=>c.id);
+}
+let results = [];
+let busy = false;
+
+// ---------- theme (light / dark) ----------
+function setTheme(t){
+  try{ localStorage.setItem('sf_theme', t); }catch(e){}
+  document.documentElement.setAttribute('data-theme', t);
+}
+function currentTheme(){ return document.documentElement.getAttribute('data-theme') || 'dark'; }
+function toggleTheme(){ setTheme(currentTheme()==='dark'?'light':'dark'); render(false); }
+
+// ---------- PWA install ----------
+let deferredInstall = null;
+window.addEventListener('beforeinstallprompt', (e)=>{ e.preventDefault(); deferredInstall = e; });
+async function tryInstall(){
+  if(deferredInstall){
+    deferredInstall.prompt();
+    await deferredInstall.userChoice;
+    deferredInstall = null;
+    const b=$('#install'); if(b) b.style.display='none';
+    return;
+  }
+  // On iPhone (Safari has no beforeinstallprompt): explain Add to Home Screen.
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  alert(isIOS
+    ? 'To install Stream Finder on your iPhone:\n\n1. Tap the Share button (the box with an up-arrow) in Safari\n2. Scroll down and tap "Add to Home Screen"\n3. Tap "Add" — it launches full-screen from your home screen.'
+    : 'Use your browser\u2019s menu to "Install app" / "Add to Home screen". It will open full-screen from your home screen.');
+}
+
+// Which channel ids the user is currently "looking through" on the main screen.
+function getChannels(){ try{ return JSON.parse(localStorage.getItem('sf_channels')||'[]'); }catch(e){ return []; } }
+function setChannels(list){ try{ localStorage.setItem('sf_channels', JSON.stringify(list||[])); }catch(e){} }
+function channelActive(){ return (state&&state.channels)?state.channels.length:(getChannels().length>0?getChannels().length:0); }
+
+// Channel meta lookup (from /api/meta); builds a sensible set if absent.
+function channelMetaList(){
+  if((META.channels||[]).length) return META.channels;
+  const best={};
+  for(const [name,id] of Object.entries(CH_BY_ID)){ if(!best[id] || name.length<best[id].length) best[id]=name; }
+  return Object.entries(best).map(([id,name])=>({id, name, color: PROV_COLOR[name]||'#334155'}));
+}
+function channelNameFor(id){ const m=channelMetaList().find(c=>c.id===id); return m?m.name:id.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase()); }
+// Only the services the user actually subscribes to (Settings → Your subscriptions).
+// The main-screen picker is about "my" services, so it shows only these.
+function subscribedChannels(){ const hh=new Set(getHousehold()); return channelMetaList().filter(c=>hh.has(c.id)); }
+
+// The TMDB key lives in .env (backend). This browser-side copy is just a
+// convenience so searches work immediately after saving in Settings.
+function tmdbKey(){ return localStorage.getItem('sf_tmdb_key')||''; }
+function setTmdbKey(k){ localStorage.setItem('sf_tmdb_key', (k||'').trim()); }
+function tmdbV4Key(){ return localStorage.getItem('sf_tmdb_v4_key')||''; }
+function setTmdbV4Key(k){ localStorage.setItem('sf_tmdb_v4_key', (k||'').trim()); }
+// The backend is self-sufficient: it always uses the keys in backend/.env (v3
+// "API Key" + v4 "Read Access Token"). We deliberately send NO key headers, so a
+// stale key in this browser can never override what the Mac has configured. The
+// browser only ever *persists* a key when the user explicitly pastes one in
+// Settings (it's not used for requests).
+function tmdbHeaders(){ return {}; }
+
+// Household subscriptions (which services you have). Stored in the browser.
+function getHousehold(){
+  try{ return JSON.parse(localStorage.getItem('sf_household')||'[]'); }catch(e){ return []; }
+}
+function setHousehold(list){ localStorage.setItem('sf_household', JSON.stringify(list)); }
+function getLimit(){ try{ const v=parseInt(localStorage.getItem('sf_max_results')); return v&&v>0?Math.min(v,1000):100; }catch(e){ return 100; } }
+function setLimit(v){ try{ localStorage.setItem('sf_max_results', String(Math.min(Math.max(1,v),1000))); }catch(e){} }
+
+// Map a provider onto a known channel id (mirror of backend channels.py).
+const CH_ALIAS = {};
+const CH_BY_ID = {'netflix':'netflix','disney':'disney','disney+':'disney','star':'disney','national geographic':'disney',
+  'apple tv':'apple','apple tv+':'apple','apple':'apple',
+  'sky':'sky','sky cinema':'sky_cinema','sky showcase':'sky_showcase','sky go':'sky_go','now tv cinema':'sky_cinema','now tv':'sky',
+  'amazon prime':'prime','prime':'prime','prime video':'prime',
+  'paramount+':'paramount','paramount':'paramount','hulu':'hulu','hulu uk':'hulu','max':'max','hbo max':'max',
+  'hbo max amazon channel':'amazon','amazon channel':'amazon','starzplay amazon channel':'amazon',
+  'bbc iplayer':'bbc','bbc':'bbc','itvx':'itvx','itv':'itvx','channel 4':'channel4','channel 5':'channel5',
+  'britbox':'britbox','acorn tv':'acorn','mubi':'mubi','shudder':'shudder','crunchyroll':'crunchyroll','pluto tv':'pluto','tubi':'tubi','freevee':'freevee','rakuten tv':'rakuten'};
+function channelFor(p){
+  const n=(p.channel_name||p.provider||'').toLowerCase();
+  if(CH_BY_ID[n]) return CH_BY_ID[n];
+  // "amazon" before "prime"/"max" so "HBO Max Amazon Channel" -> amazon, not max/prime.
+  const map=[['amazon channel','amazon'],['amazon','amazon'],['channel 4','channel4'],['channel 5','channel5'],['bbc','bbc'],['itv','itvx'],['sky','sky'],['prime','prime'],['apple','apple'],['hulu','hulu'],['paramount','paramount'],['max','max'],['disney','disney'],['netflix','netflix']];
+  for(const [needle,id] of map){ if(n.includes(needle)) return id; }
+  return null;
+}
+// Year dropdown options (2026 down to 1950), with an "any" sentinel.
+function yearOpts(val, label){
+  const cur=parseInt(val)||0;
+  let o=`<option value="" ${cur?'':'selected'}>Year ${label.toLowerCase()}: any</option>`;
+  for(let y=new Date().getFullYear(); y>=1950; y--){
+    o+=`<option value="${y}" ${cur===y?'selected':''}>${label} ${y}</option>`;
+  }
+  return o;
+}
+// Services that are genuinely free to watch (no sub, no per-title cost). Matches the
+// backend's FREE_CHANNELS so the client-side "Free" filter agrees with the server's.
+const FREE_CH = new Set(['bbc','itvx','channel4','channel5','freevee','pluto','tubi']);
+
+// Classify a title's providers against the user's household.
+function classify(providers){
+  const have=new Set(getHousehold());
+  const free=[], subs=[], rentBuy=[]; const subSeen=new Set();
+  (providers||[]).forEach(p=>{
+    const cid=p.channel||channelFor(p);
+    // A title is "included for you" if it's on a subscription you have (flatrate)
+    // OR a free service you have (free type = BBC iPlayer, ITVX, Channel 4/5…).
+    if((p.type==='flatrate'||p.type==='free') && cid && have.has(cid)){
+      if(!free.includes(cid)) free.push(cid);
+      if(!subSeen.has(cid)){ subSeen.add(cid); const m=channelMetaList().find(c=>c.id===cid); subs.push({channel:cid, channel_name:m?m.name:(p.channel_name||p.provider), color:m?m.color:'#334155'}); }
+    } else if((p.type==='rent'||p.type==='buy') && p.provider){
+      if(!rentBuy.includes(p.provider)) rentBuy.push(p.provider);
+    }
+  });
+  // "Free" (the user's meaning): it's included in a service you already pay for, so it
+  // costs nothing EXTRA. Kept if it's on a genuinely-free service (BBC/ITVX/Ch4/Ch5/
+  // Freevee/Pluto/Tubi — free at all) OR a FLATRATE entry on a service you have. A
+  // rent/buy entry on a service you have (Apple TV Store, Sky Store, Prime pay-movies)
+  // does NOT count — that's the "pay extra" to exclude.
+  const noExtra = (providers||[]).some(p => { const c=p.channel||channelFor(p); if(!c) return false; if(FREE_CH.has(c)) return true; return (p.type==='flatrate') && have.has(c); });
+  return {status: free.length?'free':(rentBuy.length?'rent':'none'), free, subs, rentBuy, noExtra};
+}
+
+const moodEmoji = {'Horror':'👻','Thriller':'🔪','Sitcom / Comedy':'😂','Action':'💥','Sci-Fi / Fantasy':'🚀','Drama':'🎭','Romance':'❤️','Kids & Family':'🧸','Documentary':'📽️','Crime / True Crime':'🕵️','Reality TV':'📺','Sport':'🏆'};
+
+async function fetchMeta(){
+  const hd=tmdbHeaders();
+  let res;
+  try{
+    res=await fetch(API+'/api/meta',{headers:hd});
+    // A 404 (or a hard fail) usually means this backend address is stale/wrong —
+    // re-resolve to a working one (e.g. fall back from a dead Tailscale to the
+    // home-Wi-Fi Mac) and retry once, instead of erroring out.
+    if(res.status === 404 || !res.ok){
+      const nb = await resolveBackend();
+      if(nb !== API){ API = nb; res = await fetch(API+'/api/meta',{headers:hd}); }
+    }
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const d=await res.json(); META=d; META._tmdbKey=d.tmdb_key;
+  }catch(e){ throw e; }  // let the boot handler show the friendly popup
+}
+
+let searchSeq = 0, searchCtl = null;
+async function doSearch(){
+  // Latest click wins: cancel any search in flight instead of ignoring the new click.
+  const mySeq = ++searchSeq;
+  if(searchCtl) try{ searchCtl.abort(); }catch(e){}
+  searchCtl = window.AbortController ? new AbortController() : null;
+  busy = true; render(true);
+  // The "My services" lens: browse the pool of everything on the services you
+  // have (all of them by default). A text search or a mood turns the lens off.
+  const myCh = lensChannels();
+  const p = new URLSearchParams();
+  if(state.q) p.set('q', state.q);
+  p.set('kind', state.kind);
+  if(state.sort!=='relevance') p.set('sort', state.sort);
+  if(state.limit) p.set('limit', state.limit);
+  state.moods.forEach(m=>{ (META.moods.find(x=>x.mood===m)?.genres||[m]).forEach(g=>p.append('genres', g)); });
+  if(state.yearMin) p.set('year_min', state.yearMin);
+  if(state.yearMax) p.set('year_max', state.yearMax);
+  if(state.minRating) p.set('min_rating', state.minRating);
+  if(state.minRt) p.set('min_rt', state.minRt);
+  if(myCh.length) myCh.forEach(c=>p.append('channel', c));
+  if(myCh.length) p.set('fetch_all', 'true');
+  // "where=true" asks the backend to return provider data for every result so we
+  // can filter/annotate on the client. Widens the pool so filters have enough.
+  const where = state.streamOnly || state.freeOnly || myCh.length>0;
+  if(where) p.set('where', 'true');
+  if(state.streamOnly) p.set('stream_only', 'true');
+  if(state.freeOnly){
+    p.set('free_only', 'true');
+    // Send the household subs so the backend's "no extra charge" filter is accurate
+    // (mirrors the client's Settings → Your subscriptions).
+    getHousehold().forEach(c=>p.append('household', c));
+  }
+  if(channelActive() || myCh.length || state.yearMin || state.yearMax || state.streamOnly) p.set('fetch_all', 'true');
+  if(state.limit) p.set('limit', state.limit);
+  const hd=tmdbHeaders();
+  // Live progress: give the backend an id; poll it while the search runs so the
+  // UI can show "pulling N of M…" instead of an infinite spinner.
+  const pid='s'+Date.now().toString(36);
+  p.set('progress_id', pid);
+  const phaseLabels={starting:'Starting…',pulled:t=>`Pulling… ${t[0]||0} of ${t[1]||''} titles`,providers:t=>`Checking where it streams… ${t[0]||0}/${t[1]||''}`,checking:t=>`Checking where it streams… ${t[0]||0}/${t[1]||''}`,ratings:t=>`Reading ratings… ${t[0]||0}/${t[1]||''}`,finishing:t=>`Finishing… ${t[0]||0}/${t[1]||''}`,done:'Done'};
+  let stopProgress=false;
+  const progEl=()=>document.getElementById('progStatus');
+  const tick=async()=>{
+    if(stopProgress) return;
+    try{
+      const pr=await (await fetch(API+'/api/progress?pid='+pid,{headers:hd})).json();
+      if(pr && pr.phase){
+        const el=progEl();
+        if(el) el.textContent = typeof pr.total!=='undefined'
+          ? `${(phaseLabels[pr.phase]||'Working…')( [pr.done, pr.total] )}`
+          : (phaseLabels[pr.phase]||'Working…');
+      }
+    }catch(e){/* ignore poll errors */}
+    if(!stopProgress) setTimeout(tick, 500);
+  };
+  tick();
+  window.__backendDown=false;
+  try{
+    let res = await fetch(API+'/api/search?'+p.toString(),{headers:hd, signal: searchCtl ? searchCtl.signal : undefined});
+    // Stale/wrong backend (404) -> re-resolve and retry once so the app self-heals
+    // (e.g. from a dead Tailscale address to the home-Wi-Fi Mac).
+    if(res.status === 404 || !res.ok){
+      const nb = await resolveBackend();
+      if(nb !== API){ API = nb; res = await fetch(API+'/api/search?'+p.toString(),{headers:hd}); }
+    }
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const d = await res.json();
+    results = d.results || [];
+    // This backend worked — remember it so the next visit just works (no setup).
+    if(API && !onMac()){ try{ localStorage.setItem('sf_backend', API); }catch(e){} }
+  }catch(e){
+    if(mySeq!==searchSeq){ stopProgress=true; return; }   // superseded by a newer search
+    console.warn(e);
+    // One silent retry (fresh connection, re-resolve backend) before showing the banner:
+    // a transient network blip / waking Mac shouldn't greet the user with an error.
+    if(!doSearch._retried){
+      doSearch._retried = true; stopProgress=true;
+      try{ API = await resolveBackend(); }catch(e2){}
+      setTimeout(doSearch, 1200); return;
+    }
+    window.__backendDown=true; results = [];
+  }
+  stopProgress=true;
+  if(mySeq!==searchSeq) return;
+  if(!window.__backendDown) doSearch._retried = false;
+  busy = false; render(false);
+}
+
+async function enrich(r){
+  const body = { title:r.title, kind:r.kind, year:r.year, genres:r.genres, poster_url:r.poster_url, backdrop_url:r.backdrop_url, overview:r.overview, tmdb_id:r.tmdb_id, ratings:r.ratings, platforms:r.platforms };
+  try{ return await (await fetch(API+'/api/enrich',{method:'POST',headers:{'Content-Type':'application/json',...tmdbHeaders()},body:JSON.stringify(body)})).json(); }
+  catch(e){ console.warn(e); return r; }
+}
+
+// ---------- rendering ----------
+function posterBg(r){
+  // Stronger, taller bottom scrim so the title/genres are always legible on any art.
+  const scrim='linear-gradient(to top,rgba(0,0,0,.92) 0%,rgba(0,0,0,.78) 34%,rgba(0,0,0,.15) 62%,rgba(0,0,0,.05) 100%)';
+  if(r.backdrop_url) return `background-image:${scrim},url('${esc(r.backdrop_url)}')`;
+  if(r.poster_url) return `background-image:${scrim},url('${esc(r.poster_url)}')`;
+  return 'background:linear-gradient(135deg,#141a2b,#0b0f1a)';
+}
+function score(r){
+  const rs=r.ratings||{};
+  const v=[]; if(rs.tmdb_vote)v.push(rs.tmdb_vote); if(rs.rt_tomatometer!=null)v.push(rs.rt_tomatometer/10);
+  if(!v.length) return null; return (v.reduce((a,b)=>a+b,0)/v.length).toFixed(1);
+}
+function rtScore(r){ const t=(r.ratings||{}).rt_tomatometer; return t!=null?t:null; }
+// The headline score shown on a card: RT critic % if we have it, else TMDB vote as a %.
+function posterScore(r){ const rs=r.ratings||{}; const s=(rs.rt_tomatometer!=null?rs.rt_tomatometer:(rs.tmdb_vote!=null?Math.round(rs.tmdb_vote*10):null)); return s==null?null:Math.round(s); }
+// 3-tier rating colour: green ≥60, amber 40–59, red <40.
+function scoreColor(v){ return v>=60?'#16a34a':v>=40?'#d97706':'#b91c1c'; }
+
+const PROV_COLOR = {'Netflix':'#E50914','Disney+':'#113CCF','Apple TV':'#5E5CE6','Sky':'#1E3A8A','Sky Cinema':'#1E3A8A','Sky Go':'#1E3A8A','BBC iPlayer':'#A31BBB','ITVX':'#1E3A8A','Channel 4':'#0E7490','Channel 5':'#FF5C00','Prime Video':'#00A8E1','Paramount+':'#17083C','Hulu':'#1CE783','Shudder':'#334155','MUBI':'#334155','BritBox':'#1D4ED8','Acorn TV':'#1D3C5F','Crunchyroll':'#F47521','Pluto TV':'#6D28D9','Tubi':'#FF6A00','Free TV':'#3B82F6','Max':'#2563EB','Max (via Amazon)':'#4B5563','Amazon Channel':'#4B5563'};
+const SVC_LABEL = {flatrate:'In', rent:'Rent', buy:'Buy', free:'Free'};
+function provChip(p){
+  const c = PROV_COLOR[p.provider] || '#334155';
+  const txt = SVC_LABEL[p.type] ? `${SVC_LABEL[p.type]} ${p.provider}` : p.provider;
+  return `<span class="text-[10px] px-1.5 py-0.5 rounded font-semibold" style="background:${c};color:#fff" title="${esc(p.provider)} — ${esc(p.type)}">${esc(p.provider)}</span>`;
+}
+function platformsRow(r, max=5, subsOnly=true){
+  let list=(r.platforms||[]);
+  if(subsOnly) list=list.filter(p=>p.type==='flatrate');
+  const seen=new Set(); const out=[];
+  list.forEach(p=>{ if(!seen.has(p.provider)){seen.add(p.provider); out.push(p);} });
+  if(!out.length) return '';
+  return `<div class="flex flex-wrap gap-1 mt-1.5">${out.slice(0,max).map(provChip).join('')}${out.length>max?`<span class="text-[10px] text-white/40">+${out.length-max}</span>`:''}</div>`;
+}
+
+function ratingBadges(r){
+  const rs=r.ratings||{}; let h='';
+  if(rs.rt_tomatometer!=null) h+=`<span class="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full" style="background:rgba(250,0,84,.16);color:#ff5d8f;border:1px solid rgba(250,0,84,.35)">🍅 ${rs.rt_tomatometer}%</span>`;
+  if(rs.rt_audience!=null) h+=`<span class="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full" style="background:rgba(250,180,0,.16);color:#ffcf4d;border:1px solid rgba(250,180,0,.35)">🍿 ${rs.rt_audience}%</span>`;
+  if(rs.tmdb_vote!=null) h+=`<span class="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full" style="background:rgba(245,197,24,.14);color:#ffd866;border:1px solid rgba(245,197,24,.3)">★ ${rs.tmdb_vote.toFixed(1)}</span>`;
+  return h;
+}
+
+function subsBadges(r){
+  const have=new Set(getHousehold());
+  const active=new Set(getChannels());
+  let subs=(r.platforms||[]).filter(p=>p.type==='flatrate'||p.type==='free');
+  const seen=new Set(); const rows=[];
+  subs.forEach(p=>{
+    const nm=p.channel_name||p.provider; if(seen.has(nm)) return; seen.add(nm);
+    const cid=p.channel||channelFor(p);
+    rows.push({nm, cid, mine: !!(cid && have.has(cid)), inScope: !active.size || (cid && active.has(cid))});
+  });
+  // Card shows ONE badge — a service the user has (preferring the one they filtered by) —
+  // plus a "+N" button that opens the full list. Everything else lives in that popup.
+  rows.sort((a,b)=> (b.mine?2:0)+(b.inScope?1:0) - ((a.mine?2:0)+(a.inScope?1:0)));
+  const top = rows.length && rows[0].mine ? rows[0] : null;
+  const extra = rows.length - (top?1:0);
+  if(!rows.length) return '';
+  const one = top ? (()=>{ const col=PROV_COLOR[top.nm]||'#475569';
+    return `<span class="text-[11px] px-2 py-1 rounded-md font-bold leading-tight" style="background:${col};color:#fff;border:2px solid #22c55e;box-shadow:0 1px 3px rgba(0,0,0,.45)" title="${esc(top.nm)} — you have this">✓ ${esc(top.nm)}</span>`; })() : '';
+  const more = extra>0 ? `<button data-subs data-t="${esc(r.title)}" data-k="${esc(r.kind)}" class="text-[11px] px-2 py-1 rounded-md font-bold leading-tight" style="background:#1e293b;color:#fff;border:2px solid rgba(255,255,255,.6)">${top?'+'+extra:extra+' other service'+(extra>1?'s':'')}</button>` : '';
+  return `<div class="flex flex-wrap items-center gap-1 mt-1">${one}${more}</div>`;
+}
+let _langNames=null;
+function langName(code){
+  if(!code) return '';
+  try{ _langNames = _langNames || new Intl.DisplayNames(['en'],{type:'language'}); return _langNames.of(code) || code.toUpperCase(); }
+  catch(e){ return code.toUpperCase(); }
+}
+function card(r){
+  const rt=posterScore(r);
+  const c=classify(r.platforms);
+  // Availability flag, top-right. Only "you can stream it" earns the prominent badge;
+  // rent/buy is a quieter tag so it doesn't shout.
+  let flag='';
+  if(c.status==='free'){
+    const names=[...new Set(c.subs.map(s=>s.channel_name))].slice(0,2).join(', ');
+    flag=`<div class="absolute top-2 right-2 z-10 text-[10px] font-bold px-2 py-1 rounded-lg leading-tight" style="background:rgba(22,163,74,.92);color:#fff">✓ Stream${names?`<br><span class="font-semibold text-[9px] opacity-95">${esc(names)}</span>`:''}</div>`;
+  } else if(c.noExtra){
+    flag=`<div class="absolute top-2 right-2 z-10 text-[10px] font-bold px-2 py-1 rounded-lg" style="background:rgba(8,145,178,.92);color:#fff">Free</div>`;
+  } else if(c.status==='rent'){
+    flag=`<div class="absolute top-2 right-2 z-10 text-[10px] font-semibold px-2 py-1 rounded-lg" style="background:rgba(0,0,0,.55);color:#fde68a;border:1px solid rgba(255,255,255,.2)">Rent / Buy</div>`;
+  }
+  const kindTag = r.kind==='show' ? 'Series' : 'Film';
+  return `<div class="card fade relative group rounded-2xl overflow-hidden border ${c.status==='free'?'border-green-500/70':'border-line'} bg-panel2 aspect-[2/3] cursor-pointer" data-t="${esc(r.title)}" data-k="${r.kind}">
+    <div class="card-poster absolute inset-0" style="${posterBg(r)}"></div>
+    ${rt!=null?`<div class="absolute top-2 left-2 z-10 flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-md" style="background:${scoreColor(rt)};color:#fff" title="Rating">★ ${rt}%</div>`:''}
+    ${flag}
+    <div class="absolute inset-x-0 bottom-0 p-3 z-10 flex flex-col gap-1.5">
+      <div class="flex items-center gap-1.5">
+        <span class="text-[10px] font-bold uppercase tracking-wide text-white/90">${kindTag}</span>
+        ${r.year?`<span class="text-[10px] font-medium text-white/55">${r.year}</span>`:''}
+        ${r.language?`<span class="text-[10px] font-semibold px-1.5 py-0.5 rounded" style="background:rgba(0,0,0,.55);color:#fff;border:1px solid rgba(255,255,255,.25)">${esc(langName(r.language))}</span>`:''}
+      </div>
+      <div class="text-[15px] font-bold leading-snug line-clamp-3 text-white" style="text-shadow:0 1px 3px rgba(0,0,0,.6)">${esc(r.title)}</div>
+      ${(r.genres||[]).length?`<div class="flex flex-wrap gap-1">${(r.genres||[]).slice(0,2).map(g=>`<span class="text-[10px] px-2 py-0.5 rounded-md font-medium" style="background:rgba(0,0,0,.5);color:#fff;border:1px solid rgba(255,255,255,.16)">${esc(g)}</span>`).join('')}</div>`:''}
+      ${subsBadges(r)}
+    </div>
+  </div>`;
+}
+
+function render(spinner){
+  const tmdbOn = META.sources.find(s=>s.key==='tmdb')?.configured || META._tmdbKey;
+  // Apply the household "only what I can stream" filter (provider data is client-side).
+  const myCh = lensChannels();
+  const subs = subscribedChannels();
+  let shown = results;
+  // When the user wants service-tracked results ("where"), drop titles that have
+  // no provider data at all (e.g. TVMaze-only shows), then apply the "I can stream"
+  // subset if that's on.
+  const whereOn = state.streamOnly || state.freeOnly || myCh.length>0;
+  if(whereOn) shown = shown.filter(r => (r.platforms||[]).length>0);
+  if(state.streamOnly) shown = shown.filter(r => classify(r.platforms).status === 'free');
+  if(state.freeOnly) shown = shown.filter(r => classify(r.platforms).noExtra);
+  // Channel selection on the main screen: keep only titles on the picked services.
+  const sel=new Set(myCh);
+  if(sel.size) shown = shown.filter(r => { const have=new Set((r.platforms||[]).map(p=>p.channel)); for(const c of have){ if(sel.has(c)) return true; } return false; });
+  const app=$('#app');
+  // The whole screen is rebuilt on every render; keep the search box focused (and the
+  // caret) if the user is in it, otherwise the keyboard closes mid-typing / when results land.
+  const _ae=document.activeElement, _qFocus=!!(_ae && _ae.id==='q'), _qS=_qFocus?_ae.selectionStart:0, _qE=_qFocus?_ae.selectionEnd:0;
+  app.innerHTML = `
+  <header class="pt-7 pb-5">
+    <div class="flex items-end justify-between flex-wrap gap-3">
+      <div>
+        <h1 class="text-3xl md:text-4xl font-black tracking-tight">Stream <span class="text-accent">Finder</span></h1>
+        <p class="text-onsub mt-0.5 text-sm">One search across every screen.</p>
+      </div>
+      <div class="flex items-center gap-2.5 text-xs">
+        <button id="install" title="Install Stream Finder as an app" class="chip px-3.5 py-2 rounded-full select-none" style="background:var(--c-panel2);border-color:var(--c-line)">⬇️ Install</button>
+        <button id="theme" title="Toggle light / dark" class="chip px-3.5 py-2 rounded-full select-none">${currentTheme()==='dark'?'☀️ Light':'🌙 Dark'}</button>
+        <button id="gear" title="Settings & keys" class="chip w-9 h-9 rounded-full flex items-center justify-center select-none" aria-label="Settings">⚙️</button>
+        <span title="Build" class="tabular-nums text-[11px] px-2 py-1 rounded-full select-none" style="background:var(--c-line);color:var(--c-onmute)">v${APP_VERSION}</span>
+      </div>
+    </div>
+    ${window.__backendDown?`<div class="mt-4 flex flex-wrap items-start gap-3 rounded-xl border px-4 py-3 text-sm" style="background:var(--c-panel);border-color:#f59e0b;color:var(--c-onfg)"><span>⚠️</span><span style="color:var(--c-onfg)"><b>Couldn't load results.</b> Check your connection (and that the Mac is switched on), then tap <b>Retry</b>.<span class="block mt-1 text-xs" style="color:var(--c-onsub)">(Trying <code>${esc(API||'this server')}</code>)</span></span><button id="retry" class="ml-auto font-semibold rounded-lg px-4 py-2" style="background:#f59e0b;color:#000">Retry</button></div>`:''}
+    ${!tmdbOn?`<div class="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-amber-400/40 bg-amber-400/10 px-4 py-3 text-sm text-amber-100"><span>🔑</span><span><b>Unlock movies:</b> add your free TMDB key. It's stored only on this Mac.</span><button id="bannerkey" class="ml-auto bg-amber-400 text-black font-semibold rounded-lg px-4 py-2 hover:bg-amber-300">Add key →</button></div>`:''}
+  </header>
+
+  <!-- Search + filters -->
+  <section class="rounded-2xl border border-line bg-panel backdrop-blur p-3 md:p-4">
+    <div class="flex flex-col sm:flex-row gap-2">
+      <div class="flex-1 relative">
+        <span class="absolute left-3.5 top-1/2 -translate-y-1/2 text-onmute text-base">🔍</span>
+        <input id="q" value="${esc(state.q)}" placeholder="Search a title, actor or director…" class="w-full field border border-line rounded-xl pl-10 pr-3 py-3 text-base placeholder-onmute focus:outline-none focus:border-accent/60" />
+      </div>
+      <div class="flex rounded-xl border border-line overflow-hidden text-sm w-full sm:w-auto">
+        ${['any','movie','show'].map(k=>`<button data-kind="${k}" class="kindbtn flex-1 sm:flex-none px-4 py-3 ${state.kind===k?'bg-accent text-white':'text-onsub hoverable'}">${k==='any'?'All':k==='movie'?'Films':'Series'}</button>`).join('')}
+      </div>
+    </div>
+
+    <div class="mt-3 flex flex-wrap items-center gap-1.5">
+      <span class="text-[11px] uppercase tracking-widest text-onmute mr-0.5">Mood</span>
+      ${META.moods.map(m=>{const a=state.moods.includes(m.mood);return `<button data-mood="${esc(m.mood)}" class="chip ${a?'active':'text-onsub'} px-2.5 py-1 rounded-full text-xs">${moodEmoji[m.mood]||'•'} ${esc(m.mood)}</button>`}).join('')}
+    </div>
+
+    <div class="mt-2.5 flex flex-wrap gap-1.5 items-center text-sm">
+      <button id="chanBtn" class="chip px-2.5 py-1.5 rounded-lg text-xs ${myCh.length?'seld':''}">${!subs.length?'Add your services ⚙️': myServicesOn?`My ${subs.length} service${subs.length>1?'s':''}`:`On ${myCh.length} service${myCh.length>1?'s':''}`}</button>
+      <select id="ymin" title="From year" class="field border border-line rounded-lg px-2 py-1.5 text-xs">${yearOpts(state.yearMin,'From')}</select>
+      <select id="ymax" title="To year" class="field border border-line rounded-lg px-2 py-1.5 text-xs">${yearOpts(state.yearMax,'To')}</select>
+      <select id="maxResults" title="Max results" class="field border border-line rounded-lg px-2 py-1.5 text-xs">
+        ${[25,50,100,200,500,1000].map(n=>`<option value="${n}" ${state.limit===n?'selected':''}>${n===1000?'Up to 1000':n}</option>`).join('')}
+      </select>
+      <label class="flex items-center gap-1.5 text-xs cursor-pointer select-none"><input type="checkbox" id="minRt" ${state.minRt?'checked':''} class="accent-red-500 w-3.5 h-3.5"/> <span class="${state.minRt?'text-red-400 font-semibold':'text-onsub'}">🍅 rated</span></label>
+      <label class="flex items-center gap-1.5 text-xs cursor-pointer select-none"><input type="checkbox" id="streamOnly" ${state.streamOnly?'checked':''} class="accent-green-500 w-3.5 h-3.5"/> <span class="${state.streamOnly?'text-green-400 font-semibold':'text-onsub'}">I can stream</span></label>
+      <label class="flex items-center gap-1.5 text-xs cursor-pointer select-none" title="Only titles you can watch for nothing extra — included in a service you have, or on a free service. Excludes rent/buy (Sky Store, Apple TV Store, Prime pay-movies)."><input type="checkbox" id="freeOnly" ${state.freeOnly?'checked':''} class="accent-cyan-400 w-3.5 h-3.5"/> <span class="${state.freeOnly?'text-cyan-300 font-semibold':'text-onsub'}">Free only</span></label>
+      <button id="go" class="bg-accent hover:bg-red-700 px-5 py-1.5 rounded-xl text-xs font-semibold">Search</button>
+      <button id="clear" class="px-3 py-1.5 rounded-xl chip text-xs text-onsub">Reset</button>
+    </div>
+  </section>
+
+  <!-- Channel picker (multi-select which services to look through) -->
+  <section id="chanPanel" class="mt-3 rounded-2xl border border-line bg-panel backdrop-blur p-3">
+    <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
+      <span class="text-[11px] uppercase tracking-widest text-onmute">Your services <span class="opacity-70 normal-case tracking-normal">(the ones you have — pick to filter)</span></span>
+      <div class="flex items-center gap-1.5">
+        <button id="chanAll" class="chip px-2 py-1 rounded-lg text-[11px] text-onsub">All</button>
+        <button id="chanNone" class="chip px-2 py-1 rounded-lg text-[11px] text-onsub">None</button>
+      </div>
+    </div>
+    <div id="chanGrid" class="flex flex-wrap gap-1.5"></div>
+  </section>
+
+  ${spinner?`<div class="mt-5 flex items-center gap-3"><div class="loadbar flex-1"></div><span id="progStatus" class="text-xs text-onsub tabular-nums">Searching…</span></div>`:''}
+  <div class="flex items-center justify-between mt-5 mb-3 flex-wrap gap-2">
+    <h2 class="text-base font-semibold text-onsub">${spinner?'Searching…':`<span class="text-accent">${shown.length}</span> results${state.q?` for “${esc(state.q)}”`:''}${!subs.length?'':myServicesOn?` · your services`:myCh.length?` · ${myCh.length} service${myCh.length>1?'s':''}`:''}${state.streamOnly?' · you can stream':''}${state.freeOnly?' · free only':''}`}</h2>
+    ${spinner?'':`<label class="flex items-center gap-2 text-xs cursor-pointer select-none">
+      <span class="text-onmute uppercase tracking-wide text-[11px]">Sort by</span>
+      <select id="sort" class="field border border-line rounded-lg px-2.5 py-1.5 text-xs">
+        ${[['relevance','Relevance'],['rating','Top rated'],['rt_critic','RT critic %'],['rt_audience','RT audience %'],['tmdb','TMDB score'],['votes','Most voted'],['newest','Year (newest)'],['oldest','Year (oldest)'],['title','Title A–Z']].map(o=>`<option value="${o[0]}" ${state.sort===o[0]?'selected':''}>${o[1]}</option>`).join('')}
+      </select>
+    </label>`}
+  </div>
+
+  <div id="grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+    ${spinner ? Array.from({length:18}).map(()=>`<div class="shimmer aspect-[2/3] rounded-2xl border border-line relative overflow-hidden"><div class="absolute bottom-0 inset-x-0 p-3 space-y-1.5"><div class="shimmer h-2 w-1/3 rounded"></div><div class="shimmer h-3 w-4/5 rounded"></div><div class="shimmer h-2 w-1/2 rounded"></div></div></div>`).join('')
+      : !subs.length ? `<div class="col-span-full text-center py-16 text-onsub"><div class="text-5xl mb-3">📺</div><b class="text-onfg text-lg">Add your services to get started</b><p class="mt-2 text-sm">Tick the subscriptions you have, and the app will show you everything you can already stream — and flag anything you'd have to rent.</p><button id="openSubs" class="mt-5 bg-accent hover:bg-red-700 px-6 py-2.5 rounded-xl text-sm font-semibold">Add my services ⚙️</button></div>`
+        : shown.length ? shown.map(card).join('')
+        : `<div class="col-span-full text-center py-20 text-onmute"><div class="text-5xl mb-3">🍿</div>
+         ${state.streamOnly?'Nothing you can stream with your current subscriptions. Turn off <b class="text-onsub">I can stream</b> to see everything.':
+           (state.freeOnly?'Nothing you can watch for nothing extra matches those filters. Free = included in a service you have, or on a free service (not rent/buy). Turn off <b class="text-onsub">Free only</b> to see everything.':
+           (channelActive()?`Nothing on <b class="text-onsub">${channelActive()} service${channelActive()>1?'s':''}</b> matches those filters right now. Try fewer moods, a different year, or a different service.`:
+           'No matches with those filters. Try a different mood, year range, or search a specific title.'))}</div>`}
+  </div>`;
+  if(_qFocus){ const q=document.getElementById('q'); if(q){ q.value=state.q; q.focus({preventScroll:true}); try{ q.setSelectionRange(_qS,_qE); }catch(e){} } }
+
+  // wire events
+  let deb;
+  $('#q').addEventListener('input', e=>{ state.q=e.target.value; if(state.q) myServicesOn=false; clearTimeout(deb); deb=setTimeout(doSearch,900); });
+  $('#q').addEventListener('keydown',e=>{ if(e.key==='Enter'){ if(state.q) myServicesOn=false; doSearch(); } });
+  $('#go').addEventListener('click',()=>{ if(state.q) myServicesOn=false; doSearch(); });
+  $('#theme')?.addEventListener('click',()=>toggleTheme());
+  const inst=$('#install'); if(inst) inst.addEventListener('click',tryInstall);
+  const ry=$('#retry'); if(ry) ry.addEventListener('click',()=>{ doSearch._retried=false; window.__backendDown=false; render(false); doSearch(); });
+  $('#streamOnly')?.addEventListener('change',e=>{state.streamOnly=e.target.checked;e.target?.nextElementSibling&&(e.target.nextElementSibling.className=state.streamOnly?'text-green-400 font-semibold':'text-onsub');render(false);});
+  $('#freeOnly')?.addEventListener('change',e=>{state.freeOnly=e.target.checked;e.target?.nextElementSibling&&(e.target.nextElementSibling.className=state.freeOnly?'text-cyan-300 font-semibold':'text-onsub');doSearch();});
+  $('#minRt')?.addEventListener('change',e=>{state.minRt=e.target.checked?1:0;e.target?.nextElementSibling&&(e.target.nextElementSibling.className=state.minRt?'text-red-400 font-semibold':'text-onsub');doSearch();});
+  $('#clear').addEventListener('click',()=>{ state={...state,q:'',moods:[],channels:[],yearMin:'',yearMax:'',minRating:0,minRt:0,sort:'relevance',streamOnly:false,freeOnly:false}; state.limit=100; setLimit(100); setChannels(['netflix']); myServicesOn=false; state.channels=['netflix']; render(false); doSearch(); });
+  $('#ymin')?.addEventListener('change',e=>{state.yearMin=e.target.value;doSearch();});
+  $('#ymax')?.addEventListener('change',e=>{state.yearMax=e.target.value;doSearch();});
+  $('#sort')?.addEventListener('change',e=>{state.sort=e.target.value;doSearch();});
+  $('#maxResults')?.addEventListener('change',e=>{state.limit=parseInt(e.target.value)||100;setLimit(state.limit);doSearch();});
+  $('#gear')?.addEventListener('click',openSettings);
+  $('#bannerkey')?.addEventListener('click',openSettings);
+  // channel picker (always visible; pick any services to filter results)
+  const grid=$('#chanGrid');
+  const markChips=()=>{ if(!grid) return; const s=new Set(myCh); grid.querySelectorAll('[data-cid]').forEach(b=>b.classList.toggle('seld', s.has(b.dataset.cid))); };
+  if(grid){
+    const active=new Set(myCh);
+    // Only show the services you subscribe to. None yet → point them to Settings.
+    grid.innerHTML = subs.length
+      ? subs.map(c=>`<button data-cid="${esc(c.id)}" class="chip ${active.has(c.id)?'seld':''} px-2.5 py-1 rounded-full text-xs" style="border-color:${c.color}88"><span class="inline-block w-2 h-2 rounded-full mr-1.5" style="background:${c.color}"></span>${esc(c.name)}</button>`).join('')
+      : `<button id="chanAdd" class="chip px-2.5 py-1 rounded-full text-xs text-onsub">You haven't ticked any services yet — <span class="underline">add yours in Settings ⚙️</span></button>`;
+  if(myServicesOn) state.channels = myCh;  // keep state in sync with the lens
+  grid.querySelectorAll('[data-cid]').forEach(b=>b.addEventListener('click',()=>{ const id=b.dataset.cid; const s=new Set(myCh); if(s.has(id))s.delete(id); else s.add(id); setChannels([...s]); myServicesOn = s.size===subscribedChannels().length; state.channels=[...s]; b.classList.toggle('seld', s.has(id)); doSearch(); }));
+  grid.querySelector('#chanAdd')?.addEventListener('click',openSettings);
+  }
+  $('#openSubs')?.addEventListener('click',openSettings);
+  // "All" = every service you subscribe to (not all 24).
+  $('#chanAll')?.addEventListener('click',()=>{ const all=subscribedChannels().map(c=>c.id); setChannels(all); myServicesOn=all.length===subscribedChannels().length; state.channels=all; markChips(); doSearch(); });
+  $('#chanNone')?.addEventListener('click',()=>{ setChannels([]); myServicesOn=false; state.channels=[]; markChips(); doSearch(); });
+  if(new URLSearchParams(location.search).get('where')==='1' && grid) grid.scrollIntoView({behavior:'smooth',block:'nearest'});
+  document.querySelectorAll('.kindbtn').forEach(b=>b.addEventListener('click',()=>{state.kind=b.dataset.kind;render(false);doSearch();}));
+  document.querySelectorAll('[data-mood]').forEach(b=>b.addEventListener('click',()=>{const m=b.dataset.mood;state.moods=state.moods.includes(m)?state.moods.filter(x=>x!==m):[...state.moods,m];render(false);doSearch();}));
+  document.querySelectorAll('.card').forEach(c=>c.addEventListener('click',e=>{
+    if(e.target.closest('[data-subs]')){ e.stopPropagation(); showSubs(e.target.closest('[data-subs]')); return; }
+    openDetail(c.dataset.t,c.dataset.k);
+  }));
+}
+
+// Popup listing ALL subscriptions a title is on (from a card's +N button)
+function showSubs(btn){
+  const r = results.find(x=>x.title===btn.dataset.t && x.kind===btn.dataset.k) || results.find(x=>x.title===btn.dataset.t);
+  if(!r) return;
+  const m=$('#modal');
+  const have=new Set(getHousehold());
+  const seenS=new Set(); const subs=[]; const others=[];
+  (r.platforms||[]).filter(p=>p.type==='flatrate'||p.type==='free').forEach(p=>{
+    const name=p.channel_name||p.provider; if(seenS.has(name)) return; seenS.add(name);
+    const cid=p.channel||channelFor(p);
+    (cid && have.has(cid) ? subs : others).push({name, color:PROV_COLOR[name]||'#334155'});
+  });
+  const rent=[...new Set((r.platforms||[]).filter(p=>p.type!=='flatrate'&&p.provider).map(p=>p.provider))];
+  m.innerHTML=`<div class="fixed inset-0 z-50 overflow-y-auto overscroll-contain" style="-webkit-overflow-scrolling:touch"><div class="absolute bg-black/80 backdrop-blur-sm" style="position:fixed;inset:0" data-x></div><div class="relative min-h-full flex items-center justify-center p-4 pb-24" style="pointer-events:none" data-x>
+    <div class="relative z-10 rounded-2xl border border-line fade p-6 w-full max-w-md" style="background:var(--c-panel);pointer-events:auto">
+      <div class="flex items-center justify-between mb-3"><h3 class="text-lg font-bold">Where to watch — ${esc(r.title)}</h3><button data-x class="w-8 h-8 rounded-full field hoverable">✕</button></div>
+      <div class="text-xs uppercase tracking-widest text-onmute mb-2">On your services</div>
+      <div class="flex flex-wrap gap-2">${subs.length?subs.map(s=>`<span class="text-sm px-3 py-1.5 rounded-lg font-semibold" style="background:${s.color};color:#fff">${esc(s.name)}</span>`).join(''):'<span class="text-onmute text-sm">None of your subs.</span>'}</div>
+      ${others.length?`<div class="text-xs uppercase tracking-widest text-onmute mt-4 mb-2">Also on (not yours)</div><div class="flex flex-wrap gap-2">${others.map(s=>`<span class="text-sm px-3 py-1.5 rounded-lg font-semibold" style="background:${s.color};color:#fff">${esc(s.name)}</span>`).join('')}</div>`:''}
+      ${rent.length?`<div class="text-xs uppercase tracking-widest text-onmute mt-4 mb-2">Rent / Buy</div><div class="flex flex-wrap gap-2">${rent.map(n=>`<span class="text-sm px-3 py-1.5 rounded-lg field text-onsub">${esc(n)}</span>`).join('')}</div>`:''}
+    </div></div></div>`;
+  const close=()=>{m.innerHTML='';window.removeEventListener('keydown',e2);};
+  const e2=e=>{if(e.key==='Escape')close();};
+  m.querySelectorAll('[data-x]').forEach(b=>b.onclick=close);
+  window.addEventListener('keydown',e2);
+}
+
+// ---------- detail modal ----------
+function openDetail(title, kind){
+  const r = results.find(x=>x.title===title && x.kind===kind) || results.find(x=>x.title===title);
+  if(!r) return;
+  const m=$('#modal');
+  m.innerHTML = `<div class="fixed inset-0 z-50 overflow-y-auto overscroll-contain" style="-webkit-overflow-scrolling:touch"><div class="absolute bg-black/80 backdrop-blur-sm" style="position:fixed;inset:0"></div><div class="relative min-h-full flex items-center justify-center p-4 pb-24" data-close>
+    <div class="relative z-10 w-full max-w-3xl rounded-2xl border border-line bg-ink fade">
+      <div class="relative h-56 md:h-72" style="${posterBg(r)}"><button class="absolute top-3 right-3 z-10 w-9 h-9 rounded-full bg-black/60 text-white/80 hover:bg-black/80" data-x>✕</button></div>
+      <div id="detailBody" class="p-5 md:p-7 -mt-16 relative" style="background:var(--c-panel)">
+        <div class="text-onsub text-xs uppercase tracking-widest">${r.kind==='movie'?'Film':'Series'}</div>
+        <h2 class="text-3xl font-black mt-1">${esc(r.title)}</h2>
+        <div class="mt-2 flex flex-wrap gap-2 items-center text-sm text-onsub">
+          ${r.year?`<span>${r.year}</span>`:''}
+          ${(r.genres||[]).map(g=>`<span class="chip px-2 py-0.5 rounded-full text-xs">${esc(g)}</span>`).join('')}
+          ${r.runtime_minutes?`<span>${r.runtime_minutes}m</span>`:''}
+        </div>
+        <div class="mt-3 flex flex-wrap gap-2">${ratingBadges(r)||''}</div>
+        <div class="mt-5 text-onfg leading-relaxed" style="opacity:.9">${esc(r.overview)||'<span class="text-onmute">No synopsis.</span>'}</div>
+        <div class="mt-5"><div class="text-xs uppercase tracking-widest text-onmute mb-2">Where to watch <span class="normal-case tracking-normal opacity-70">(UK)</span></div><div id="watchRow" class="flex flex-wrap gap-1.5">${(r.platforms&&r.platforms.length)?`<div class="flex flex-wrap gap-1.5">${[...new Set(r.platforms.map(p=>p.provider))].map(p=>{const pr=r.platforms.find(x=>x.provider===p);const c=PROV_COLOR[p]||'#334155';const t=SVC_LABEL[pr.type];return `<span class="text-xs px-2.5 py-1 rounded-lg font-semibold" style="background:${c};color:#fff">${esc(p)}${t?`<span class="opacity-70 font-normal"> · ${t}</span>`:''}</span>`;}).join('')}</div>`:'<span class="text-onmute text-sm">Checking availability…</span>'}</div></div>
+        ${(r.cast&&r.cast.length)?`<div class="mt-5"><div class="text-xs uppercase tracking-widest text-onmute mb-2">Cast <span class="normal-case tracking-normal opacity-70">— tap a name for their films</span></div><div class="flex flex-wrap gap-2" id="castRow">${(r.cast_full||[]).slice(0,10).map((c,i)=>`<button data-pid="${c.person_id||''}" data-name="${esc(c.name)}" class="chip px-3 py-1 rounded-full text-sm cursor-pointer hoverable">${esc(c.name)}</button>`).join('')||(r.cast.slice(0,10).map(c=>`<span class="chip px-3 py-1 rounded-full text-sm">${esc(c)}</span>`).join(''))}</div></div>`:''}
+        ${r.trailer_url?`<div class="mt-6"><div class="text-xs uppercase tracking-widest text-onmute mb-2">Trailer</div><div class="aspect-video rounded-xl overflow-hidden border border-line"><iframe class="w-full h-full" src="${esc(r.trailer_url)}?autoplay=1&rel=0" allow="autoplay; encrypted-media" allowfullscreen></iframe></div></div>`:''}
+        ${r.external_url?`<div class="mt-6"><a href="${esc(r.external_url)}" target="_blank" rel="noopener" class="inline-flex items-center gap-2 field hoverable border border-line px-4 py-2.5 rounded-xl text-sm">Open full details ↗</a></div>`:''}
+      </div>
+    </div></div></div>`;
+  const close=()=>{m.innerHTML='';window.removeEventListener('keydown',esc2);};
+  const esc2=e=>{if(e.key==='Escape')close();};
+  m.querySelector('[data-x]').onclick=close;
+  m.querySelector('[data-close]').onclick=e=>{if(e.target.dataset.close)close();};
+  window.addEventListener('keydown',esc2);
+  // enrich: always fetch where-to-watch + fuller ratings/trailer/cast
+  const db=$('#detailBody');
+  enrich(r).then(fr=>{
+    const badgeRow = db.querySelector('.mt-3.flex'); if(badgeRow) badgeRow.innerHTML=ratingBadges(fr)||'';
+    // where to watch
+    const wr = db.querySelector('#watchRow');
+    if(wr){
+      const provs=[...new Set((fr.platforms||[]).map(p=>p.provider))];
+      wr.innerHTML = provs.length ? provs.map(p=>{const pr=(fr.platforms||[]).find(x=>x.provider===p);const c=PROV_COLOR[p]||'#334155';const t=SVC_LABEL[pr.type];return `<span class="text-xs px-2.5 py-1 rounded-lg font-semibold" style="background:${c};color:#fff">${esc(p)}${t?`<span class="opacity-70 font-normal"> · ${t}</span>`:''}</span>`;}).join('')
+        : `<span class="text-onmute text-sm">Not listed on any UK streaming service we track (Netflix, Disney+, Apple TV, Sky, Prime, BBC, ITVX, Channel 4, Channel 5, BritBox, Max, Paramount+). It may still be available to rent/buy, or only on a service we don't list.</span>`;
+    }
+    // Trailer: replace the existing placeholder's src if present, otherwise add a new
+    // block. (Replacing fixes the "no video" case where the card had a placeholder but
+    // enrich returned a different/real trailer URL.)
+    let tr= db.querySelector('.aspect-video iframe');
+    if(fr.trailer_url){ if(!tr){ const div=document.createElement('div'); div.className='mt-6'; div.innerHTML='<div class="text-xs uppercase tracking-widest text-white/45 mb-2">Trailer</div><div class="aspect-video rounded-xl overflow-hidden border border-line"><iframe class="w-full h-full" src="'+fr.trailer_url+'?autoplay=1&rel=0" allow="autoplay; encrypted-media" allowfullscreen></iframe></div>'; db.appendChild(div);} else tr.src=fr.trailer_url; }
+    // make cast clickable (buttons) once we have person_ids
+    const cr = db.querySelector('#castRow');
+    if(cr){
+      if(fr.cast_full && fr.cast_full.length){
+        cr.innerHTML = fr.cast_full.map(c=>`<button data-pid="${c.person_id||''}" data-name="${esc(c.name)}" class="chip px-3 py-1 rounded-full text-sm cursor-pointer hoverable">${esc(c.name)}</button>`).join('');
+      } else if(fr.cast && fr.cast.length){
+        cr.innerHTML = fr.cast.map(c=>`<span class="chip px-3 py-1 rounded-full text-sm">${esc(c)}</span>`).join('');
+      }
+    } else if((fr.cast_full && fr.cast_full.length) || (fr.cast && fr.cast.length)){
+      // no cast row in the initial render — add one
+      const div=document.createElement('div'); div.className='mt-5';
+      div.innerHTML='<div class="text-xs uppercase tracking-widest text-onmute mb-2">Cast</div><div class="flex flex-wrap gap-2" id="castRow"></div>';
+      db.appendChild(div);
+      div.querySelector('#castRow').innerHTML=(fr.cast_full&&fr.cast_full.length?fr.cast_full:fr.cast).map(c=>c.person_id?`<button data-pid="${c.person_id}" data-name="${esc(c.name)}" class="chip px-3 py-1 rounded-full text-sm cursor-pointer hoverable">${esc(c.name)}</button>`:`<span class="chip px-3 py-1 rounded-full text-sm">${esc(c)}</span>`).join('');
+    }
+  });
+  // delegated: tapping any cast name opens their filmography
+  m.querySelector('#detailBody')?.addEventListener('click', e=>{
+    const b = e.target.closest('[data-pid]');
+    if(b && b.dataset.pid){ openActor(b.dataset.pid, b.dataset.name); }
+  });
+}
+
+// ---------- actor popup: their films + shows ----------
+async function openActor(pid, name){
+  const m=$('#modal');
+  m.innerHTML=`<div class="fixed inset-0 z-[55] overflow-y-auto overscroll-contain" style="-webkit-overflow-scrolling:touch"><div class="absolute bg-black/85 backdrop-blur-sm" style="position:fixed;inset:0"></div><div class="relative min-h-full flex items-center justify-center p-4 pb-24" data-ac>
+    <div class="relative z-10 rounded-2xl border border-line fade p-6 w-full max-w-2xl" style="background:var(--c-panel)">
+      <div class="flex items-center justify-between mb-4"><h3 class="text-xl font-black">🎬 ${esc(name||'Actor')}</h3><button data-x class="w-8 h-8 rounded-full field hoverable">✕</button></div>
+      <div id="actorBody" class="text-onmute text-sm">Loading filmography…</div>
+    </div></div></div>`;
+  const close=()=>{m.innerHTML='';window.removeEventListener('keydown',e2);};
+  const e2=e=>{if(e.key==='Escape')close();};
+  m.querySelectorAll('[data-x]').forEach(b=>b.onclick=close);
+  m.querySelector('[data-ac]').onclick=e=>{if(e.target.dataset.ac)close();};
+  window.addEventListener('keydown',e2);
+  const hd=tmdbHeaders();
+  try{
+    const d=await (await fetch(`${API}/api/person/${pid}`,{headers:hd})).json();
+    const grid=(arr,title)=>{
+      if(!arr.length) return `<div class="text-onmute text-sm mt-3">${title} — none found.</div>`;
+      return `<div class="text-xs uppercase tracking-widest text-onmute mt-4 mb-2">${title} <span class="opacity-70">(${arr.length})</span></div>
+        <div class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">${arr.map(x=>`<div class="relative aspect-[2/3] rounded-lg overflow-hidden border border-line group" style="background:${x.poster?`linear-gradient(to top,rgba(0,0,0,.7),transparent),url('${x.poster.replace(/'/g,'')}')`:'linear-gradient(135deg,#1b2436,#0e1320)'};background-size:cover;background-position:center">
+          <div class="absolute inset-x-0 bottom-0 p-1.5"><div class="text-[10px] font-semibold leading-tight line-clamp-2 text-white">${esc(x.title)}</div><div class="text-[9px] text-white/60">${x.year||''}${x.role?' · '+esc(x.role).slice(0,18):''}</div></div></div>`).join('')}</div>`;
+    };
+    $('#actorBody').innerHTML =
+      (d.profile?`<img src="${d.profile}" class="w-20 h-20 rounded-full object-cover border-2 border-line" alt=""/>`:'')+
+      (d.name&&d.name!==name?`<div class="text-onsub text-sm">${esc(d.name)}</div>`:'')+
+      grid(d.films,'Films')+grid(d.shows,'TV shows');
+  }catch(err){
+    $('#actorBody').innerHTML='<div class="text-red-300 text-sm">Could not load filmography.</div>';
+  }
+}
+
+// ---------- settings panel (keys + logins) ----------
+async function openSettings(){
+  let keys={tmdb:{set:false,masked:''},tmdb_v4:{set:false,masked:''},serper:{set:false,masked:''}};
+  try{ keys=await (await fetch(API+'/api/keys',{headers:tmdbHeaders()})).json(); }catch(e){}
+  const gate=false;
+  const badge=(on,txt)=>`<span class="text-xs px-2 py-0.5 rounded-full" style="background:${on===null||on===undefined?'var(--chip-bg)':on?'rgba(80,250,157,.15)':'rgba(245,197,24,.15)'};color:${on===null||on===undefined?'var(--c-onmute)':on?'#50fa9d':'#ffd866'}">${txt}</span>`;
+  const unknown=(on)=>on===null||on===undefined;
+  const m=$('#modal');
+  m.innerHTML=`<div class="fixed inset-0 z-50 overflow-y-auto overscroll-contain" style="-webkit-overflow-scrolling:touch"><div class="absolute inset-0 bg-black/80 backdrop-blur-sm" style="position:fixed"></div>
+    <div class="relative min-h-full flex items-center justify-center p-4 pb-24" style="pointer-events:none"><div class="relative z-10 w-full max-w-lg rounded-2xl border border-line fade p-6" style="background:var(--c-panel);pointer-events:auto">
+      <div class="flex items-center justify-between mb-1"><h2 class="text-2xl font-black">Settings</h2><button data-x class="w-9 h-9 rounded-full field hoverable">✕</button></div>
+      <p class="text-onsub text-sm mb-5">API keys live on the Mac (in <code>backend/.env</code>) and are used automatically — you don't need to paste anything here. Subscriptions &amp; the backend address are stored on this device.${gate?'<br><span class="text-onmute text-xs">Keys are hidden here because the app is publicly accessible; they can only be changed on the Mac.</span>':''}</p>
+
+       <div class="space-y-5">
+         <div>
+          <div class="flex items-center justify-between mb-2"><label class="font-semibold">Backend <span class="text-xs text-onmute">— where to fetch live data</span></label></div>
+           <input id="k_backend" value="${esc(localStorage.getItem('sf_backend')||'')}" placeholder="leave blank = auto (always‑on server: ${esc(HF_API)})" class="w-full field border border-line rounded-xl px-3 py-2.5 text-sm"/>
+           <p class="text-xs text-onmute mt-1">Leave blank to auto‑detect: it prefers the free always‑on server (Hugging Face Space), then the family Mac (home Wi‑Fi), then Tailscale. The Space can take ~30s to wake after a long idle.</p>
+        </div>
+          ${gate?`<div class="rounded-xl border border-line field px-4 py-3 text-sm text-onsub">🔑 Keys are managed on the Mac and hidden in this public view. To add or change a key, edit <code>backend/.env</code> on the Mac.</div>`:`
+          <div>
+           <div class="flex items-center justify-between mb-2"><label class="font-semibold">TMDB — where to watch <span class="text-xs text-onmute">("API Key")</span></label>
+             ${badge(keys.tmdb.set,keys.tmdb.set?'configured on the Mac':'not set')}</div>
+           <input id="k_tmdb" ${keys.tmdb.set?'readonly':''} value="${keys.tmdb.set?esc(keys.tmdb.masked):esc(tmdbKey())}" placeholder="${keys.tmdb.set?'managed on the Mac (backend/.env)':'paste a new key to add to the Mac'}" class="w-full field border border-line rounded-xl px-3 py-2.5 text-sm"/>
+           ${keys.tmdb.set?`<p class="text-xs text-onmute mt-1">✓ Loaded from the Mac — used automatically.</p>`:`<a href="https://www.themoviedb.org/settings/api" target="_blank" class="text-xs text-accent underline">Open TMDB key page ↗</a> <span class="text-xs text-onmute">(paste a free key to enable it on the Mac)</span>`}
+           <p class="text-xs text-onmute mt-1">Powers <b>streaming services</b> (Netflix, Disney+, Sky…). To change it, edit <code>backend/.env</code> on the Mac.</p>
+         </div>
+         <div>
+           <div class="flex items-center justify-between mb-2"><label class="font-semibold">TMDB — film &amp; series details <span class="text-xs text-onmute">("Read Access Token", v4)</span></label>
+             ${badge(keys.tmdb_v4.set,keys.tmdb_v4.set?'configured on the Mac':'not set')}</div>
+           <input id="k_tmdb_v4" ${keys.tmdb_v4.set?'readonly':''} value="${keys.tmdb_v4.set?esc(keys.tmdb_v4.masked):esc(tmdbV4Key())}" placeholder="${keys.tmdb_v4.set?'managed on the Mac (backend/.env)':'paste a token to add to the Mac'}" class="w-full field border border-line rounded-xl px-3 py-2.5 text-sm"/>
+           ${keys.tmdb_v4.set?`<p class="text-xs text-onmute mt-1">✓ Loaded from the Mac — used automatically.</p>`:`<p class="text-xs text-onmute mt-1">Recommended — powers <b>casts, trailers &amp; ratings</b>. To add it, edit <code>backend/.env</code> on the Mac.</p>`}
+         </div>
+         <div class="h-px bg-line"></div>
+         <div>
+           <div class="flex items-center justify-between mb-2"><label class="font-semibold">Serper.dev <span class="text-xs text-onmute">— optional, for TV ratings</span></label>
+             <span class="text-xs px-2 py-0.5 rounded-full" style="background:${keys.serper.set?'rgba(80,250,157,.15)':'var(--chip-bg)'};color:${keys.serper.set?'#50fa9d':'var(--c-onmute)'}">${keys.serper.set?'configured':'optional'}</span></div>
+           <input id="k_serper" value="" placeholder="optional — lets us resolve ratings for TV shows" class="w-full field border border-line rounded-xl px-3 py-2.5 text-sm"/>
+         </div>`}
+        <div class="h-px bg-line"></div>
+        <div>
+          <div class="flex items-center justify-between mb-1"><label class="font-semibold">Your subscriptions</label><button id="subToggleAll" class="text-xs text-accent underline">All</button></div>
+          <p class="text-xs text-onmute mb-3">Tick what you have. Cards then show <span class="text-green-400">✓ STREAM</span> for things included in a sub you have.</p>
+          <div id="subsGrid" class="grid grid-cols-2 gap-1.5 max-h-56 overflow-y-auto pr-1"></div>
+          <div class="flex gap-2 mt-3"><input id="newSub" placeholder="add your own service (e.g. Stan)" class="flex-1 field border border-line rounded-xl px-3 py-2 text-sm"/><button id="addSub" class="field hoverable rounded-xl px-4 text-sm">Add</button></div>
+        </div>
+      </div>
+
+      <div class="flex items-center justify-between mt-6">
+        <span id="saveMsg" class="text-xs"></span>
+        <div class="flex gap-2"><button data-x class="px-4 py-2 rounded-xl chip text-onsub">Close</button><button id="savekeys" class="bg-accent hover:bg-red-700 text-white px-5 py-2 rounded-xl font-semibold">Save</button></div>
+      </div>
+    </div></div></div>`;
+  const close=()=>{m.innerHTML='';window.removeEventListener('keydown',esc2);};
+  const esc2=e=>{if(e.key==='Escape')close();};
+  m.querySelectorAll('[data-x]').forEach(b=>b.onclick=close);
+  m.querySelector('.absolute').onclick=e=>{if(e.target.classList.contains('absolute'))close();};
+  window.addEventListener('keydown',esc2);
+  // --- subscriptions grid ---
+  let custom=[...new Set(getHousehold())].filter(id=>!(META.channels||[]).find(c=>c.id===id));
+  const allChannels=[...META.channels||[], ...custom.map(id=>({id, name:id.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase()), color:'#64748b'}))];
+  const have=new Set(getHousehold());
+  const subsGrid=$('#subsGrid');
+  subsGrid.innerHTML=allChannels.map(c=>`<label class="flex items-center gap-2 text-sm px-2.5 py-1.5 rounded-lg cursor-pointer hoverable" style="${have.has(c.id)?'background:rgba(80,250,157,.08)':''}">
+    <input type="checkbox" data-cid="${esc(c.id)}" ${have.has(c.id)?'checked':''} class="accent-green-500"/>
+    <span class="inline-block w-2.5 h-2.5 rounded-full" style="background:${c.color}"></span>
+    <span class="text-onfg">${esc(c.name)}</span></label>`).join('');
+  subsGrid.querySelectorAll('input').forEach(cb=>cb.addEventListener('change',()=>{ cb.closest('label').style.background=cb.checked?'rgba(80,250,157,.08)':''; }));
+  $('#addSub').onclick=()=>{ const v=$('#newSub').value.trim(); if(!v)return; const id=v.toLowerCase().replace(/[^a-z0-9]+/g,'_'); if(!have.has(id)){have.add(id);custom=custom.filter(x=>x!==id); setHousehold([...have]); subsGrid.insertAdjacentHTML('beforeend',`<label class="flex items-center gap-2 text-sm px-2.5 py-1.5 rounded-lg cursor-pointer" style="background:rgba(80,250,157,.08)"><input type="checkbox" data-cid="${id}" checked class="accent-green-500"/><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:#64748b"></span><span class="text-onfg">${esc(v)}</span></label>`); $('#newSub').value='';} };
+  $('#newSub').addEventListener('keydown',e=>{if(e.key==='Enter')$('#addSub').click();});
+  const tgl=$('#subToggleAll'); if(tgl) tgl.onclick=()=>{ const all=subsGrid.querySelectorAll('input').length; const anyUnchecked=[...subsGrid.querySelectorAll('input')].some(i=>!i.checked); subsGrid.querySelectorAll('input').forEach(i=>{i.checked=anyUnchecked; i.closest('label').style.background=i.checked?'rgba(80,250,157,.08)':'';}); tgl.textContent=anyUnchecked?'None':'All'; };
+    // --- clear any key this browser happens to have cached (the Mac's .env keys are
+    // always used regardless) ---
+    
+   // --- save ---
+    $('#savekeys').onclick=async()=>{
+     const body={};
+     const bk=$('#k_backend');
+     const newBackend=(bk&&bk.value?bk.value.trim():null);
+     if(newBackend!== (localStorage.getItem('sf_backend')||null)){
+       if(newBackend) localStorage.setItem('sf_backend', newBackend); else localStorage.removeItem('sf_backend');
+     }
+     const tm=$('#k_tmdb'), v4=$('#k_tmdb_v4'), se=$('#k_serper');
+     // Only POST a key if the user typed a NEW one. When the backend already has a
+     // key the box is read-only (masked), so its value equals the masked string and
+     // we must not treat that as a key to save. We compare against the masked value.
+     const maskOf=(el, masked)=> (el && el.value && el.value !== masked) ? el.value.trim() : null;
+     const newTm = maskOf(tm, keys.tmdb.masked);
+     const newV4 = maskOf(v4, keys.tmdb_v4.masked);
+     const newSe = (se && se.value ? se.value.trim() : null);
+     // No key entered and no backend config changed -> nothing to persist to the Mac.
+     if(newTm) body.tmdb_api_key=newTm;
+     if(newV4) body.tmdb_v4_token=newV4;
+     if(newSe) body.serper_api_key=newSe;
+    // persist the ticked subscriptions
+    const ticked=[...subsGrid.querySelectorAll('input')].filter(i=>i.checked).map(i=>i.dataset.cid);
+    setHousehold(ticked);
+    const msg=$('#saveMsg'); msg.textContent='Saving…'; msg.className='text-xs text-white/60';
+    try{
+            const r=await (await fetch(API+'/api/keys',{method:'POST',headers:{'Content-Type':'application/json',...tmdbHeaders()},body:JSON.stringify(body)})).json();
+       if(!r.ok){ msg.textContent='Could not save'; msg.className='text-xs text-red-300'; return; }
+       if(bk&&bk.value) bk.value=localStorage.getItem('sf_backend')||'';  // reflect the stored backend
+      const v=r.validation||{};
+      let parts=[];
+      if(v.api_key){ if(v.api_key.ok===false) parts.push(`<span class="text-red-300">API Key rejected (${v.api_key.message}).</span>`); else parts.push('API Key ✓'); }
+      if(v.v4_token){ if(v.v4_token.ok===false) parts.push(`<span class="text-red-300">Read Token rejected (${v.v4_token.message}).</span>`); else parts.push('Read Token ✓ (full details)'); }
+      if(!parts.length) parts.push(`${ticked.length} service${ticked.length===1?'':'s'}`);
+      const anyBad=parts.some(x=>/rejected/i.test(x));
+      msg.innerHTML='✓ Saved — '+parts.join(' · ');
+      msg.className='text-xs '+(anyBad?'text-amber-300':'text-popcorn');
+      if(!anyBad) setTimeout(()=>{close();fetchMeta().then(()=>{render(false);doSearch();});},600);
+    }catch(e){ msg.textContent='Error: '+e; msg.className='text-xs text-red-300'; }
+  };
+}
+
+// boot — if the user has never set their subscriptions, pre-fill the common ones
+(async()=>{
+  if(window.__headErr){ window.showErr(window.__headErr); return; }  // a parse/boot error already happened
+  state.limit = getLimit();
+  if(!localStorage.getItem('sf_household')){
+    setHousehold(['bbc','itvx','channel4','channel5','sky','apple','disney','paramount','hulu','netflix','prime']);
+  }
+  // Restore the remembered service lens: "all" = your services (the default),
+  // a specific subset = what the user picked last time.
+  // Default provider = Netflix (until the user picks otherwise). An empty/absent saved
+  // pick counts as "not chosen yet", so the chip is visibly selected and results match it.
+  try{
+    let ch=JSON.parse(localStorage.getItem('sf_channels')||'null');
+    if(!ch || !ch.length){ ch=['netflix']; setChannels(ch); }
+    myServicesOn = ch.length===subscribedChannels().length;
+    if(!myServicesOn) state.channels=ch;
+  }catch(e){}
+  render(false);
+  // PWA: register the service worker (offline shell + install). Only on http(s).
+  if('serviceWorker' in navigator && /^https?:$/.test(location.protocol)){
+    // Register relative to the page so the scope matches the app (incl. any
+    // /stream-finder path prefix). A relative URL resolves against the page dir.
+    const swUrl = new URL('sw.js', location.href).href;
+    navigator.serviceWorker.register(swUrl).then(reg=>{
+      // Force an update on every load so an installed PWA picks up the newest
+      // shell (bumped cache name) without the user clearing anything.
+      if(reg && reg.update) reg.update().catch(()=>{});
+    }).catch(e=>console.warn('SW register failed', e));
+  }
+  // Find a reachable backend before first use (home Wi‑Fi / Tailscale / ?backend=).
+  API = await resolveBackend();
+  try{
+    await fetchMeta(); doSearch();
+  }catch(e){
+    sendDiag('boot-fail');
+    let d = '';
+    const dg = window.__diag;
+    if(dg && dg.steps && dg.steps.length){
+      d = '\n\nWhat the phone tried:\n' + dg.steps.map(s=>`  • ${s.backend} → ${s.status} (${s.ms}ms)`).join('\n');
+    }
+    window.showErr(`Couldn't reach the app's data at ${API}.${d}\n\n(${e})`, '', 'network'); // boot only fails when the backend is unreachable
+  }
+})();
+</script>
+</body>
+</html>

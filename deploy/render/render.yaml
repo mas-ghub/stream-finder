@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: stream-finder-api
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.main
+    healthCheckPath: /api/meta
+    autoDeploy: true
+    env:
+      SF_HOST: "0.0.0.0"
+      # Set the real values in the Render dashboard → Environment (never commit keys):
+      # SF_TMDB_API_KEY, SF_TMDB_V4_TOKEN, SF_SERPER_API_KEY (optional)

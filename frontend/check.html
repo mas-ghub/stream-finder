@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stream Finder backend check</title>
+<style>
+  body{font-family:-apple-system,system-ui,sans-serif;background:#05070d;color:#f8fafc;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
+  .box{background:#0d1117;border:1px solid #21262d;border-radius:16px;padding:28px 32px;max-width:520px}
+  h1{font-size:18px;margin:0 0 8px}
+  code{background:#161b22;padding:2px 6px;border-radius:6px;font-size:13px}
+  .ok{color:#4ade80;font-weight:700}.bad{color:#f87171;font-weight:700}
+</style>
+</head>
+<body>
+<div class="box">
+  <h1>🔎 Stream Finder backend check</h1>
+  <p style="color:#8b949e;font-size:13px">This page tells you if your browser can reach the app's data on the family Mac. It does <b>not</b> save anything — just checks and shows the result.</p>
+  <div id="out" style="margin-top:16px;font-size:14px">Checking…</div>
+</div>
+<script>
+const B = new URLSearchParams(location.search).get('backend') || 'https://192.168.0.59:8443';
+const back = () => { location.href = './'; };
+const out = document.getElementById('out');
+
+function sayReachable(){
+  out.innerHTML = '✅ <span class="ok">Reachable</span><br><br>Your browser <b>can</b> reach the backend at <code>' + B + '</code>.<br>The app will work — no settings needed.';
+  out.insertAdjacentHTML('beforeend', '<br><br><button id="go" style="margin-top:10px;padding:10px 18px;font-size:14px;font-weight:700;border:0;border-radius:10px;background:#e50914;color:#fff;cursor:pointer">Open the app →</button>');
+  document.getElementById('go').onclick = back;
+}
+function sayBlocked(reason){
+  out.innerHTML = '❌ <span class="bad">Blocked or offline</span> (' + reason + ')<br><br>' +
+    'The Mac server may be off, <b>or</b> your browser is blocking this site from reaching ' +
+    'a device on your local network.<br><br>' +
+    '<b>Fix:</b> click the address bar → the <b>lock / info icon</b> → "Site settings" (Chrome: "Permissions") → ' +
+    'set <b>Local network</b> to <b>Allow</b>, then retry.<br><br>' +
+    '<button id="retry" style="padding:10px 18px;font-size:14px;font-weight:700;border:1px solid #30363d;border-radius:10px;background:#21262d;color:#f8fafc;cursor:pointer">Retry</button> ' +
+    '<button id="go" style="margin-left:8px;padding:10px 18px;font-size:14px;font-weight:700;border:0;border-radius:10px;background:#e50914;color:#fff;cursor:pointer">Open the app anyway</button>';
+  document.getElementById('retry').onclick = run;
+  document.getElementById('go').onclick = back;
+}
+function run(){
+  out.textContent = 'Checking…';
+  fetch(B + '/api/meta', { signal: AbortSignal.timeout(6000) })
+    .then(r => sayReachable())
+    .catch(e => sayBlocked(e.name || 'error'));
+}
+// Ask for the local-network permission in a user gesture (Chrome shows its
+// prompt; on unsupported browsers this is a no-op and we just test the fetch).
+(async function(){
+  if(navigator.permissions && navigator.permissions.query){
+    try{
+      const p = await navigator.permissions.query({name:'local-network'});
+      if(p && p.request && p.state !== 'granted') await p.request().catch(()=>{});
+    }catch(e){/* not supported — just test the fetch below */}
+  }
+  run();
+})();
+</script>
+</body>
+</html>

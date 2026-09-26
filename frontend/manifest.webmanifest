@@ -1,0 +1,25 @@
+{
+  "name": "Stream Finder",
+  "short_name": "StreamFinder",
+  "description": "One search across every UK screen — where to watch, what's free, ratings and trailers.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#05070d",
+  "theme_color": "#e50914",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}
