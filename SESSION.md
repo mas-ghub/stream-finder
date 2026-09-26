@@ -5,6 +5,13 @@ Last updated: the "Chrome local-network block → permission flow" session.
 
 ## FUTURE IDEA (user, not now): host without depending on the Mac staying on/awake/logged in (e.g. always-on hosting). Mac currently needs: plugged in, lid open, logged in. `sudo pmset -c sleep 0` applied (display sleep still 10 min).
 
+## v1.53 (current): single shared backend + correct local sorts
+- **Every device now uses the shared cloud (Render) backend** — `backendCandidates()` puts `RENDER_API` last-but-default (only a `?backend=` or stored override precedes it); `resolveBackend()` no longer special-cases `onMac()`; initial `API = RENDER_API`. Goal: phone + Mac return IDENTICAL results/counts. **UNRESOLVED: user reports it still differs (phone 444 / Mac 504) even on v1.53.** Prime suspect left for tomorrow: the Mac's `localStorage['sf_backend']` still holds the OLD local URL (192.168.0.59 / 127.0.0.1) from before — `backendCandidates()` pushes the stored value BEFORE the cloud, so the Mac keeps using its own backend. Fix: clear `sf_backend` (or force cloud-first), and verify which base URL each device actually hits (the error banner + Settings→Backend field show it).
+- **Local sorts fixed (v1.52):** `sortResults` rewritten with explicit best/worst comparators — every order-style sort is descending-first, no-value sinks, equal values keep backend order (index tiebreak). Year (newest/oldest) correct. Full set (≤300) kept in memory → all re-sorts instant, no refetch. "Max results" caps display only.
+- **Backend (v1.48–v1.53):** pool capped at the page size *before* provider lookup (no more 502/OOM on big browses); `fetch_all` + `pool` params; RT attached to **all** survivors (removed the 200 cap) so results are stable. Config `fetch_all_pool` (default 1500) caps memory on the free 512MB instance.
+- Live: Render `stream-finder-api` (srv-dart93u0tbcc73cvb9d0) v1.53; Pages `mas-ghub.github.io/stream-finder/` v1.53 (sf-shell-v27).
+- **Still pending (user):** rotate both TMDB keys (they were exposed ~15 min during the .env/certs commit incident) → then update Render env + `backend/.env` on the Mac.
+
 ## v1.44: cards show ONE of my services (green ✓) + a '+N' button (data-subs → showSubs popup: 'On your services' / 'Also on (not yours)' / rent-buy). Language badge on cards: backend Result.language (TMDB original_language), client Intl.DisplayNames. status.sh URL fixed to :10000. Backend restarted via launchctl kickstart. Cache v18.
 
 ## v1.43: render() rebuilds the whole page (innerHTML) — search box lost focus/keyboard when results landed or the debounced search fired. Now restores focus+caret after each render; typing debounce 350→900ms. Cache v18? (sf-shell-v17).
