@@ -1294,6 +1294,24 @@ FRONTEND = Path(__file__).resolve().parent.parent.parent / "frontend" / "index.h
 FRONTEND_DIR = FRONTEND.parent
 
 
+import httpx, time
+@app.get("/api/diag-out")
+async def diag_out():
+    out = {}
+    for name, url in [
+        ("tmdb", "https://api.themoviedb.org/3/configuration"),
+        ("tvmaze", "https://api.tvmaze.com/shows/1"),
+        ("rotten", "https://www.rottentomatoes.com/"),
+    ]:
+        t0 = time.time()
+        try:
+            async with httpx.AsyncClient(timeout=8) as c:
+                r = await c.get(url)
+            out[name] = f"{r.status_code} {int((time.time()-t0)*1000)}ms"
+        except Exception as e:
+            out[name] = f"ERR {type(e).__name__}"
+    return out
+
 @app.get("/")
 async def index():
     if FRONTEND.exists():
