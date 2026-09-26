@@ -1171,14 +1171,15 @@ async def search(
         # Everything else (service filter, mood, year, genre, text) is pre-filtered
         # and provider-checked, so a single filter pass is exact.
         pool = _apply_filters(results, q)
-    # RT for every title that survived, so the client can sort by RT locally
-    # without a refetch. The cache makes repeat sorts free; the pass is a few
-    # seconds on a ~200-title service browse.
+    # RT for EVERY title that survived (no cap), so the client can sort/filter by
+    # RT locally and the result set is identical no matter the pool order or which
+    # device made the request. A ~200-title service browse is a few seconds; the
+    # provider/rating cache makes repeat queries free.
     if settings.rt_enabled:
         if pid:
-            _progress(pid, phase="ratings", done=0, total=min(len(pool), 200))
-        await _gather_bounded([_attach_rt(r) for r in pool[:200] if r.title], 10,
-                              progress_key=pid, progress_phase="ratings", progress_total=min(len(pool), 200))
+            _progress(pid, phase="ratings", done=0, total=len(pool))
+        await _gather_bounded([_attach_rt(r) for r in pool if r.title], 10,
+                              progress_key=pid, progress_phase="ratings", progress_total=len(pool))
     ordered = _sort(pool, q)
     filtered = ordered[:limit]
     if pid:
