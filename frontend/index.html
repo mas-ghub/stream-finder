@@ -118,8 +118,8 @@ window.showErr = function(msg, extra, kind){
         : 'If you&#39;re <i>not</i> on the home Wi-Fi (or the Mac is asleep): the app can&#39;t reach its data — ')
       + 'open <a href="' + (typeof LAN_URL === 'undefined' ? '' : LAN_URL()) + '" class="underline text-white">' + esc(LAN_URL()) + '</a> directly — on a device on the home Wi&#8209;Fi it needs no permission at all.';
   } else if(isNet){
-    body = 'The app&#39;s data lives on a free always‑on server (Hugging Face Space). It can take ~30&#8211;60s to wake up after a long idle — give it a moment and tap <b>Retry</b>. '
-      + 'If it still fails, check your internet connection, or open the app on the family Mac: <code>./status.sh</code> for the local address.';
+    body = 'The app&#39;s data lives on the family Mac. This works when you&#39;re on the home Wi‑Fi and the Mac is on. On the Mac, run: <code>cd ~/testai/stream-finder && ./family.sh</code>. '
+      + 'Away from home, open the Tailscale address instead: <code>' + esc(MAC_TS) + '</code> — it works from anywhere (the Mac must be on).';
   } else {
     body = 'The app hit an error while loading. Try a hard refresh (Cmd+Shift+R). If it keeps happening, copy the details below.';
   }
@@ -204,7 +204,7 @@ window.addEventListener('unhandledrejection', e => {
 // GitHub Pages page can fetch it (Safari blocks https→http "mixed content").
 const MAC_LAN = 'https://192.168.0.59:8443';
 const MAC_TS  = 'https://marks-macbook-pro.tail0003aa.ts.net:10000';
-const HF_API  = 'https://abcdefghlmnop-stream-finder-api.hf.space';
+const HF_API  = "https://abcdefghlmnop-stream-finder-api.hf.space"; // placeholder for now — swap in the Render URL once it is live (backend candidates below)
 const TAILNET_HOST = 'marks-macbook-pro.tail0003aa.ts.net';
 function onMac(){
   return location.protocol.startsWith('http') && (
@@ -218,7 +218,7 @@ function backendCandidates(){
   const stored = localStorage.getItem('sf_backend');
   if(stored) c.push(stored);                        // last one that worked
   if(onMac()) c.push('');                           // served from the Mac itself
-  else { c.push(HF_API); c.push(MAC_LAN); c.push(MAC_TS); }  // always-on HF Space, then home Wi‑Fi, then Tailscale
+  else { c.push(MAC_LAN); c.push(MAC_TS); c.push(HF_API); }  // home Wi‑Fi, then Tailscale, then cloud placeholder
   return c.filter((v, i) => c.indexOf(v) === i);   // dedupe, keep order
 }
 // Try each candidate (bounded) until one answers, then remember it. Returns the
@@ -286,7 +286,7 @@ function localNetPermissionNeeded(){
 // by the Pages deploy).
 const checkUrl = () => onMac() ? new URL('check', location.href).href : new URL('check.html', location.href).href;
 const LAN_URL = () => MAC_LAN; // direct address (also needs the Mac on + same Wi-Fi)
-let API = onMac() ? '' : HF_API;   // initial guess; boot() refines it via resolveBackend()
+let API = onMac() ? '' : MAC_LAN;   // initial guess; boot() refines it via resolveBackend()
 const $ = (s, r=document)=>r.querySelector(s);
 const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -936,8 +936,8 @@ async function openSettings(){
        <div class="space-y-5">
          <div>
           <div class="flex items-center justify-between mb-2"><label class="font-semibold">Backend <span class="text-xs text-onmute">— where to fetch live data</span></label></div>
-           <input id="k_backend" value="${esc(localStorage.getItem('sf_backend')||'')}" placeholder="leave blank = auto (always‑on server: ${esc(HF_API)})" class="w-full field border border-line rounded-xl px-3 py-2.5 text-sm"/>
-           <p class="text-xs text-onmute mt-1">Leave blank to auto‑detect: it prefers the free always‑on server (Hugging Face Space), then the family Mac (home Wi‑Fi), then Tailscale. The Space can take ~30s to wake after a long idle.</p>
+           <input id="k_backend" value="${esc(localStorage.getItem('sf_backend')||'')}" placeholder="leave blank = auto (home Wi‑Fi: ${esc(MAC_LAN)})" class="w-full field border border-line rounded-xl px-3 py-2.5 text-sm"/>
+           <p class="text-xs text-onmute mt-1">Leave blank to auto‑detect: it tries the family Mac (home Wi‑Fi), then the Tailscale address (works from anywhere — the Mac must be on).</p>
         </div>
           ${gate?`<div class="rounded-xl border border-line field px-4 py-3 text-sm text-onsub">🔑 Keys are managed on the Mac and hidden in this public view. To add or change a key, edit <code>backend/.env</code> on the Mac.</div>`:`
           <div>
