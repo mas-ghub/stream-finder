@@ -1167,22 +1167,27 @@ async def search(
             await _gather_bounded([_attach_rt(r) for r in pool[:200] if r.title], 10,
                                   progress_key=pid, progress_phase="ratings", progress_total=min(len(pool), 200))
         pool = _apply_filters(pool, q)
-        ordered = _sort(pool, q)
     else:
         # Everything else (service filter, mood, year, genre, text) is pre-filtered
-        # and provider-checked, so a single filter pass + sort is exact.
+        # and provider-checked, so a single filter pass is exact.
         pool = _apply_filters(results, q)
-        ordered = _sort(pool, q)
+    # RT for every title that survived, so the client can sort by RT locally
+    # without a refetch. The cache makes repeat sorts free; the pass is a few
+    # seconds on a ~200-title service browse.
+    if settings.rt_enabled:
+        if pid:
+            _progress(pid, phase="ratings", done=0, total=min(len(pool), 200))
+        await _gather_bounded([_attach_rt(r) for r in pool[:200] if r.title], 10,
+                              progress_key=pid, progress_phase="ratings", progress_total=min(len(pool), 200))
+    ordered = _sort(pool, q)
     filtered = ordered[:limit]
     if pid:
         _progress(pid, phase="finishing", done=0, total=len(filtered))
-    # Enrich only the page the user sees. Providers are only fetched when the UI will
-    # use them (a service filter / "I can stream" / where), otherwise a plain browse
-    # wastes 100 provider calls for nothing. Cast + RT are always cheap.
+    # Enrich only the page the user sees (RT was just attached to the whole pool).
     need_providers = bool(q.channels) or q.stream_only or q.free_only or q.where
     if settings.tmdb_enabled and (tmdb_key() or tmdb_v4_key()):
         await _gather_bounded(
-            [asyncio.gather(*([_attach_providers(r)] if need_providers else []) + [_attach_cast(r), _attach_rt(r)])
+            [asyncio.gather(*([_attach_providers(r)] if need_providers else []) + [_attach_cast(r)])
              for r in filtered],
             8, progress_key=pid, progress_phase="finishing", progress_total=len(filtered))
     # "Free" (the user's meaning) = included in a service you already pay for, i.e. it

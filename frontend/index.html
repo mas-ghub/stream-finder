@@ -292,10 +292,13 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.48';
+const APP_VERSION = '1.49';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false };
+// Full result set from the last fetch. Sorts (incl. RT) happen locally against this —
+// a re-sort reshuffles what's loaded instead of refetching (the backend sorts the pool).
+let allResults = [];
 // "My services" is the default lens on first load (all of them, or none → no browse
 // pool). Toggling off, Reset, or a text/mood search all set this to false.
 let myServicesOn = true;
@@ -471,7 +474,9 @@ async function doSearch(){
   if(myCh.length) myCh.forEach(c=>p.append('channel', c));
   // Wider pool whenever the user is filtering by their services (browse or mood) so
   // the provider check has enough to keep; a plain text search stays fast.
-  if(myCh.length && !state.q){ p.set('fetch_all', 'true'); p.set('pool', state.limit); }
+  if(myCh.length && !state.q) p.set('fetch_all', 'true');
+  // Ask for as many results as we'll ever sort locally (the UI caps the display).
+  p.set('limit', Math.max(state.limit, 300));
   // "where=true" asks the backend to return provider data for every result so we
   // can filter/annotate on the client. Widens the pool so filters have enough.
   const where = state.streamOnly || state.freeOnly || myCh.length>0;
@@ -516,7 +521,7 @@ async function doSearch(){
     }
     if(!res.ok) throw new Error('HTTP '+res.status);
     const d = await res.json();
-    results = d.results || [];
+    allResults = d.results || [];
     // This backend worked — remember it so the next visit just works (no setup).
     if(API && !onMac()){ try{ localStorage.setItem('sf_backend', API); }catch(e){} }
   }catch(e){
@@ -529,7 +534,7 @@ async function doSearch(){
       try{ API = await resolveBackend(); }catch(e2){}
       setTimeout(doSearch, 1200); return;
     }
-    window.__backendDown=true; results = [];
+    window.__backendDown=true; allResults = [];
   }
   stopProgress=true;
   if(mySeq!==searchSeq) return;
@@ -561,6 +566,34 @@ function rtScore(r){ const t=(r.ratings||{}).rt_tomatometer; return t!=null?t:nu
 function posterScore(r){ const rs=r.ratings||{}; const s=(rs.rt_tomatometer!=null?rs.rt_tomatometer:(rs.tmdb_vote!=null?Math.round(rs.tmdb_vote*10):null)); return s==null?null:Math.round(s); }
 // 3-tier rating colour: green ≥60, amber 40–59, red <40.
 function scoreColor(v){ return v>=60?'#16a34a':v>=40?'#d97706':'#b91c1c'; }
+
+// Local sort (mirrors the backend's _sort_key) so re-sorting reshuffles what's
+// already loaded instead of refetching. Titles with no value for a rating sort
+// sink to the bottom; ties fall back to title.
+function sortResults(list, sort){
+  const out = list.slice();
+  const blend = r => { const rs=r.ratings||{}; const v=[]; if(rs.tmdb_vote!=null)v.push(rs.tmdb_vote); if(rs.rt_tomatometer!=null)v.push(rs.rt_tomatometer/10); if(!v.length) return null; return v.reduce((a,b)=>a+b,0)/v.length; };
+  // Higher first; a "miss" (no value) sorts below every real number; ties → title.
+  const cmp = (a,b,av,bv) => {
+    const aMiss = av === 'miss', bMiss = bv === 'miss';
+    if(aMiss && bMiss) return (a.title||'').localeCompare(b.title||'');
+    if(aMiss) return 1;
+    if(bMiss) return -1;
+    return bv > av ? -1 : bv < av ? 1 : (a.title||'').localeCompare(b.title||'');
+  };
+  const get = (r,f) => { const v = f(r); return v == null ? 'miss' : v; };
+  switch(sort){
+    case 'rating':      return out.sort((a,b)=> cmp(a,b, get(a,blend), get(b,blend)));
+    case 'rt_critic':   return out.sort((a,b)=> cmp(a,b, get(a,r=>r.ratings?.rt_tomatometer), get(b,r=>r.ratings?.rt_tomatometer)));
+    case 'rt_audience': return out.sort((a,b)=> cmp(a,b, get(a,r=>r.ratings?.rt_audience), get(b,r=>r.ratings?.rt_audience)));
+    case 'tmdb':        return out.sort((a,b)=> cmp(a,b, get(a,r=>r.ratings?.tmdb_vote), get(b,r=>r.ratings?.tmdb_vote)));
+    case 'votes':       return out.sort((a,b)=> cmp(a,b, a.ratings?.tmdb_count||0, b.ratings?.tmdb_count||0));
+    case 'newest':      return out.sort((a,b)=> cmp(a,b, a.year||0, b.year||0));
+    case 'oldest':      return out.sort((a,b)=> cmp(a,b, a.year||9999, b.year||9999));
+    case 'title':       return out.sort((a,b)=> (a.title||'').localeCompare(b.title||''));
+    default:            return out; // 'relevance' keeps the backend's order
+  }
+}
 
 const PROV_COLOR = {'Netflix':'#E50914','Disney+':'#113CCF','Apple TV':'#5E5CE6','Sky':'#1E3A8A','Sky Cinema':'#1E3A8A','Sky Go':'#1E3A8A','BBC iPlayer':'#A31BBB','ITVX':'#1E3A8A','Channel 4':'#0E7490','Channel 5':'#FF5C00','Prime Video':'#00A8E1','Paramount+':'#17083C','Hulu':'#1CE783','Shudder':'#334155','MUBI':'#334155','BritBox':'#1D4ED8','Acorn TV':'#1D3C5F','Crunchyroll':'#F47521','Pluto TV':'#6D28D9','Tubi':'#FF6A00','Free TV':'#3B82F6','Max':'#2563EB','Max (via Amazon)':'#4B5563','Amazon Channel':'#4B5563'};
 const SVC_LABEL = {flatrate:'In', rent:'Rent', buy:'Buy', free:'Free'};
@@ -661,6 +694,11 @@ function render(spinner){
   // Channel selection on the main screen: keep only titles on the picked services.
   const sel=new Set(myCh);
   if(sel.size) shown = shown.filter(r => { const have=new Set((r.platforms||[]).map(p=>p.channel)); for(const c of have){ if(sel.has(c)) return true; } return false; });
+  // Sort locally against the full fetched set (the backend fetched RT + ratings for
+  // every surviving title, so every sort option is exact and instant — no refetch).
+  shown = sortResults(shown, state.sort);
+  // "Max results" caps the display only (the fetch was already bigger; re-sorts are free).
+  shown = shown.slice(0, state.limit);
   const app=$('#app');
   // The whole screen is rebuilt on every render; keep the search box focused (and the
   // caret) if the user is in it, otherwise the keyboard closes mid-typing / when results land.
@@ -764,7 +802,7 @@ function render(spinner){
   $('#clear').addEventListener('click',()=>{ state={...state,q:'',moods:[],channels:[],yearMin:'',yearMax:'',minRating:0,minRt:0,sort:'relevance',streamOnly:false,freeOnly:false}; state.limit=100; setLimit(100); setChannels(['netflix']); myServicesOn=false; state.channels=['netflix']; render(false); doSearch(); });
   $('#ymin')?.addEventListener('change',e=>{state.yearMin=e.target.value;doSearch();});
   $('#ymax')?.addEventListener('change',e=>{state.yearMax=e.target.value;doSearch();});
-  $('#sort')?.addEventListener('change',e=>{state.sort=e.target.value;doSearch();});
+  $('#sort')?.addEventListener('change',e=>{state.sort=e.target.value;render(false);});
   $('#maxResults')?.addEventListener('change',e=>{state.limit=parseInt(e.target.value)||100;setLimit(state.limit);doSearch();});
   $('#maxResults').value = String(state.limit);
   $('#gear')?.addEventListener('click',openSettings);
