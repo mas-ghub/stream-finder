@@ -292,7 +292,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.49';
+const APP_VERSION = '1.50';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false };
@@ -310,7 +310,6 @@ function lensChannels(){
   const saved=getChannels();
   return saved.length ? saved : subscribedChannels().map(c=>c.id);
 }
-let results = [];
 let busy = false;
 
 // ---------- theme (light / dark) ----------
@@ -534,7 +533,7 @@ async function doSearch(){
       try{ API = await resolveBackend(); }catch(e2){}
       setTimeout(doSearch, 1200); return;
     }
-    window.__backendDown=true; allResults = [];
+    window.__backendDown=true; allResults = null; // keep any previous results; render() shows the error banner, not a silent "0 results"
   }
   stopProgress=true;
   if(mySeq!==searchSeq) return;
@@ -683,7 +682,8 @@ function render(spinner){
   // Apply the household "only what I can stream" filter (provider data is client-side).
   const myCh = lensChannels();
   const subs = subscribedChannels();
-  let shown = results;
+  // Base set: keep what we last fetched, so a failed re-fetch doesn't wipe the grid.
+  let shown = allResults || [];
   // When the user wants service-tracked results ("where"), drop titles that have
   // no provider data at all (e.g. TVMaze-only shows), then apply the "I can stream"
   // subset if that's on.
@@ -779,12 +779,14 @@ function render(spinner){
   <div id="grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
     ${spinner ? Array.from({length:18}).map(()=>`<div class="shimmer aspect-[2/3] rounded-2xl border border-line relative overflow-hidden"><div class="absolute bottom-0 inset-x-0 p-3 space-y-1.5"><div class="shimmer h-2 w-1/3 rounded"></div><div class="shimmer h-3 w-4/5 rounded"></div><div class="shimmer h-2 w-1/2 rounded"></div></div></div>`).join('')
       : !subs.length ? `<div class="col-span-full text-center py-16 text-onsub"><div class="text-5xl mb-3">📺</div><b class="text-onfg text-lg">Add your services to get started</b><p class="mt-2 text-sm">Tick the subscriptions you have, and the app will show you everything you can already stream — and flag anything you'd have to rent.</p><button id="openSubs" class="mt-5 bg-accent hover:bg-red-700 px-6 py-2.5 rounded-xl text-sm font-semibold">Add my services ⚙️</button></div>`
-        : shown.length ? shown.map(card).join('')
-        : `<div class="col-span-full text-center py-20 text-onmute"><div class="text-5xl mb-3">🍿</div>
-         ${state.streamOnly?'Nothing you can stream with your current subscriptions. Turn off <b class="text-onsub">I can stream</b> to see everything.':
-           (state.freeOnly?'Nothing you can watch for nothing extra matches those filters. Free = included in a service you have, or on a free service (not rent/buy). Turn off <b class="text-onsub">Free only</b> to see everything.':
-           (channelActive()?`Nothing on <b class="text-onsub">${channelActive()} service${channelActive()>1?'s':''}</b> matches those filters right now. Try fewer moods, a different year, or a different service.`:
-           'No matches with those filters. Try a different mood, year range, or search a specific title.'))}</div>`}
+         : shown.length ? shown.map(card).join('')
+         : (window.__backendDown
+            ? `<div class="col-span-full text-center py-16 text-onsub"><div class="text-5xl mb-3">⚠️</div><b class="text-onfg text-lg">Couldn't reach the results server.</b><p class="mt-2 text-sm" style="color:var(--c-onsub)">It may be waking up (the free cloud backend sleeps when idle) — give it a moment, then <b>Retry</b>.</p><button id="retry2" class="mt-5 bg-amber-500 hover:bg-amber-400 text-black px-6 py-2.5 rounded-xl text-sm font-semibold">Retry</button></div>`
+            : `<div class="col-span-full text-center py-20 text-onmute"><div class="text-5xl mb-3">🍿</div>
+          ${state.streamOnly?'Nothing you can stream with your current subscriptions. Turn off <b class="text-onsub">I can stream</b> to see everything.':
+            (state.freeOnly?'Nothing you can watch for nothing extra matches those filters. Free = included in a service you have, or on a free service (not rent/buy). Turn off <b class="text-onsub">Free only</b> to see everything.':
+            (channelActive()?`Nothing on <b class="text-onsub">${channelActive()} service${channelActive()>1?'s':''}</b> matches those filters right now. Try fewer moods, a different year, or a different service.`:
+            'No matches with those filters. Try a different mood, year range, or search a specific title.'))}</div>`)}
   </div>`;
   if(_qFocus){ const q=document.getElementById('q'); if(q){ q.value=state.q; q.focus({preventScroll:true}); try{ q.setSelectionRange(_qS,_qE); }catch(e){} } }
 
@@ -795,7 +797,9 @@ function render(spinner){
   $('#go').addEventListener('click',()=>{ if(state.q) myServicesOn=false; doSearch(); });
   $('#theme')?.addEventListener('click',()=>toggleTheme());
   const inst=$('#install'); if(inst) inst.addEventListener('click',tryInstall);
-  const ry=$('#retry'); if(ry) ry.addEventListener('click',()=>{ doSearch._retried=false; window.__backendDown=false; render(false); doSearch(); });
+  const _retry=()=>{ doSearch._retried=false; window.__backendDown=false; render(false); doSearch(); };
+  $('#retry')?.addEventListener('click',_retry);
+  $('#retry2')?.addEventListener('click',_retry);
   $('#streamOnly')?.addEventListener('change',e=>{state.streamOnly=e.target.checked;e.target?.nextElementSibling&&(e.target.nextElementSibling.className=state.streamOnly?'text-green-400 font-semibold':'text-onsub');render(false);});
   $('#freeOnly')?.addEventListener('change',e=>{state.freeOnly=e.target.checked;e.target?.nextElementSibling&&(e.target.nextElementSibling.className=state.freeOnly?'text-cyan-300 font-semibold':'text-onsub');doSearch();});
   $('#minRt')?.addEventListener('change',e=>{state.minRt=e.target.checked?1:0;e.target?.nextElementSibling&&(e.target.nextElementSibling.className=state.minRt?'text-red-400 font-semibold':'text-onsub');doSearch();});
