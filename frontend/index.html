@@ -292,7 +292,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.46';
+const APP_VERSION = '1.47';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false };
@@ -471,7 +471,7 @@ async function doSearch(){
   if(myCh.length) myCh.forEach(c=>p.append('channel', c));
   // Wider pool whenever the user is filtering by their services (browse or mood) so
   // the provider check has enough to keep; a plain text search stays fast.
-  if(myCh.length && !state.q) p.set('fetch_all', 'true');
+  if(myCh.length && !state.q){ p.set('fetch_all', 'true'); p.set('pool', state.limit); }
   // "where=true" asks the backend to return provider data for every result so we
   // can filter/annotate on the client. Widens the pool so filters have enough.
   const where = state.streamOnly || state.freeOnly || myCh.length>0;

@@ -35,5 +35,9 @@ class Settings(BaseSettings):
     # what the client asks for (a safety cap on the "max results" setting).
     max_results: int = 1000
 
+    # Pool size for fetch_all (service-filtered) browses. 1500 = safe on a 512MB
+    # free Render instance; raise on a bigger plan (e.g. 3000) for deeper results.
+    fetch_all_pool: int = 1500
+
 
 settings = Settings()

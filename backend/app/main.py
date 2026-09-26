@@ -197,6 +197,7 @@ class Query(BaseModel):
     free_only: bool = False
     household: list[str] = Field(default_factory=list)
     fetch_all: bool = False
+    pool: int | None = None
     sort: str = "relevance"
     limit: int = 60
 
@@ -1051,6 +1052,7 @@ async def search(
     free_only: bool = False,
     household: list[str] = FQuery(default=[]),
     fetch_all: bool = False,
+    pool: int | None = None,
     sort: str = "relevance",
     limit: int = 60,
     progress_id: str | None = None,
@@ -1063,7 +1065,8 @@ async def search(
     q = Query(q=q, kind=kind, genres=genres, mood=mood, year_min=year_min,
               year_max=year_max, min_rating=min_rating, min_rt=min_rt,
               channels=channels, where=where, stream_only=stream_only,
-              free_only=free_only, household=household, fetch_all=fetch_all, sort=sort, limit=limit)
+              free_only=free_only, household=household, fetch_all=fetch_all,
+              pool=pool, sort=sort, limit=limit)
     tmdb_on = settings.tmdb_enabled and bool(tmdb_key())
     pid = progress_id  # key for the live progress the frontend polls
     if pid:
@@ -1091,8 +1094,14 @@ async def search(
             # UK-origin pool only for UK free-to-air services; subscription services
             # are global, so no origin filter (it would drop most foreign titles).
             oc = "GB" if q.channels and set(q.channels) <= UK_ONLY else None
-            pool = 3000 if q.fetch_all else (1000 if q.channels else (200 if q.where else 120))
-            max_t = pool // len(dks)
+            # fetch_all (service-filtered browse) uses a bigger pool so the provider
+            # check finds more hits. The client asks for its max-results value; the
+            # SF_FETCH_ALL_POOL setting caps memory use (1500 = safe on the free
+            # 512MB Render instance; raise it on a bigger plan for deeper browses).
+            base_pool = 1000 if q.channels else (200 if q.where else 120)
+            if q.fetch_all and q.pool:
+                base_pool = min(max(q.pool, 200), settings.fetch_all_pool)
+            max_t = base_pool // len(dks)
             for dk in dks:
                 tasks.append(("tmdb", dk, _tmdb_discover(dk, q.genres, year_min, year_max, max_t, oc, q.channels, pid)))
         if not tmdb_only:
