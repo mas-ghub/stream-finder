@@ -1,0 +1,17 @@
+# Secrets — never commit
+.env
+*.key
+*.crt
+*.csr
+*.srl
+secrets/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# macOS
+.DS_Store
