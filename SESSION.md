@@ -734,3 +734,27 @@ Fixed the two long-standing complaints: (1) picking 2+ genres/moods → 0 items,
   (no free official API; OMDb is unofficial/flaky/1000-per-day — user declined).
 - Max-results control: settings field, ceiling **1000**.
 - Sort options: **all** (relevance, top rated, TMDB, RT critic, RT audience, votes, A–Z, newest, oldest).
+
+## THIS SESSION (v1.45 — cloud backend: Render, always-on without the Mac)
+Goal: host the FastAPI backend on a free always-on host so the app works when the Mac is off.
+- **HF Spaces is out:** free accounts can no longer create Docker/Gradio Spaces — the create
+  API returns 402 (PRO $9/mo required). A static placeholder Space exists at
+  abcdefghlmnop-stream-finder-api.hf.space (subdomain edge 404s — likely needs PRO; harmless).
+- **Render (free tier) hosts the backend:** service `stream-finder-api` (srv-dart93u0tbcc73cvb9d0)
+  → `https://stream-finder-api.onrender.com` — free plan: 512MB, sleeps after 15 min idle
+  (~1 min wake). Created + configured via the Render REST API with the user's API key
+  (key is NOT stored anywhere; recreate in Render dashboard if lost). Env: SF_TMDB_API_KEY,
+  SF_TMDB_V4_TOKEN, SF_SERPER_API_KEY, SF_HOST. Build: `pip install fastapi "uvicorn[standard]"
+  httpx pydantic pydantic-settings`; start: `python -m app.main` (Render injects $PORT; the
+  app binds it in `__main__`). rootDir=backend. Blueprint: deploy/render/render.yaml.
+  **Security:** the first push accidentally committed backend/.env + certs to the public repo;
+  purged with a force-push, but the user must ROTATE both TMDB keys (they were exposed ~15 min).
+- **Frontend candidate order (non-Mac):** home Wi‑Fi → Tailscale → Render.
+  (Tailscale first of the two "Mac" options; Render last because of the idle-sleep wake.)
+- **BUG FIXED:** .github/workflows/pages.yml uploaded `path: .` (repo root) — the Pages site
+  was frozen at the old frontend while the repo moved. Now `path: frontend`. Lesson: after any
+  frontend change, verify `https://mas-ghub.github.io/stream-finder/` actually shows the new
+  APP_VERSION.
+- Verified live: /api/meta 200; search bridgerton (kind=show) 3; Netflix+where browse 8 with
+  providers (names+channels map correctly); RT/TVMaze/TMDB outbound all 200 from Render.
+- Mac setup untouched (launchd, Funnel :10000, 8443) — still works; Render is the 3rd fallback.
