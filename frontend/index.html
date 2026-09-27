@@ -317,7 +317,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.54';
+const APP_VERSION = '1.55';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false };
@@ -517,9 +517,24 @@ async function doSearch(){
   // UI can show "pulling N of M…" instead of an infinite spinner.
   const pid='s'+Date.now().toString(36);
   p.set('progress_id', pid);
-  const phaseLabels={starting:'Starting…',pulled:t=>`Pulling… ${t[0]||0} of ${t[1]||''} titles`,providers:t=>`Checking where it streams… ${t[0]||0}/${t[1]||''}`,checking:t=>`Checking where it streams… ${t[0]||0}/${t[1]||''}`,ratings:t=>`Reading ratings… ${t[0]||0}/${t[1]||''}`,finishing:t=>`Finishing… ${t[0]||0}/${t[1]||''}`,done:'Done'};
+  const phaseLabels={starting:'Starting…',pulled:t=>`Pulling… ${t[0]||0} of ${t[1]||''} titles`,providers:t=>`Checking where it streams… ${t[0]||0}/${t[1]||''}`,checking:t=>`Checking where it streams… ${t[0]||0}/${t[1]||''}`,ratings:t=>`Reading ratings… ${t[0]||0}/${t[1]||''}`,finishing:t=>`Filling in details… ${t[0]||0}/${t[1]||''} — browse as they land`,done:'Done'};
   let stopProgress=false;
   const progEl=()=>document.getElementById('progStatus');
+  // Cards stream in as the backend enriches them (cast + where-to-watch per title).
+  // Each poll merges a snapshot into allResults and re-renders IN PLACE (no
+  // skeleton flash) — so the grid fills up while the rest of the pool is still
+  // loading, and the user can start tapping/scrolling immediately.
+  let lastPartial=-1;
+  const streamPartial=pr=>{
+    const partial=Array.isArray(pr.partial_results)?pr.partial_results:null;
+    if(!partial || partial.length===lastPartial) return;
+    lastPartial=partial.length;
+    const prev=allResults||[];
+    const merged=[...partial];
+    for(const r of prev) if(!merged.some(p=>p.tmdb_id? p.tmdb_id===r.tmdb_id && p.kind===r.kind : p.title===r.title && p.kind===r.kind)) merged.push(r);
+    allResults=merged;
+    render(false);
+  };
   const tick=async()=>{
     if(stopProgress) return;
     try{
@@ -530,6 +545,7 @@ async function doSearch(){
           ? `${(phaseLabels[pr.phase]||'Working…')( [pr.done, pr.total] )}`
           : (phaseLabels[pr.phase]||'Working…');
       }
+      streamPartial(pr);
     }catch(e){/* ignore poll errors */}
     if(!stopProgress) setTimeout(tick, 500);
   };
@@ -545,7 +561,11 @@ async function doSearch(){
     }
     if(!res.ok) throw new Error('HTTP '+res.status);
     const d = await res.json();
-    allResults = d.results || [];
+    // Merge, don't replace: the partial stream (streamPartial) may have already
+    // rendered newer per-card data than the server's final snapshot.
+    const prev=allResults||[];
+    const seen=new Set((d.results||[]).map(r=>r.tmdb_id?'m'+r.kind+r.tmdb_id:r.kind+'|'+r.title));
+    allResults=[...(d.results||[]), ...prev.filter(r=>!seen.has(r.tmdb_id?'m'+r.kind+r.tmdb_id:r.kind+'|'+r.title))];
     // This backend worked — remember it so the next visit just works (no setup).
     if(API){ try{ localStorage.setItem('sf_backend', API); }catch(e){} }
   }catch(e){
@@ -560,10 +580,24 @@ async function doSearch(){
     }
     window.__backendDown=true; allResults = null; // keep any previous results; render() shows the error banner, not a silent "0 results"
   }
-  stopProgress=true;
-  if(mySeq!==searchSeq) return;
+  if(mySeq!==searchSeq){ stopProgress=true; return; }   // superseded (user chose a new load)
   if(!window.__backendDown) doSearch._retried = false;
   busy = false; render(false);
+  // The response's cast/provider data is a snapshot; the backend keeps enriching
+  // the rest of the page. Keep polling so the remaining cards fill in — but SLOWLY
+  // (it's background work now) and stop the moment a newer search takes over:
+  // any user action that needs a fresh load calls doSearch(), which bumps
+  // searchSeq and aborts this poll loop.
+  const bgTick=async()=>{
+    if(stopProgress || mySeq!==searchSeq) return;
+    try{
+      const pr=await (await fetch(API+'/api/progress?pid='+pid,{headers:hd})).json();
+      if(pr && pr.phase) streamPartial(pr);
+      if(pr && pr.phase==='done') return;
+    }catch(e){ if(mySeq===searchSeq) return; }
+    if(!stopProgress && mySeq===searchSeq) setTimeout(bgTick, 2000);
+  };
+  setTimeout(bgTick, 2000);
 }
 
 async function enrich(r){
@@ -823,9 +857,9 @@ function render(spinner){
     <div id="chanGrid" class="flex flex-wrap gap-1.5"></div>
   </section>
 
-  ${spinner?`<div class="mt-5 flex items-center gap-3"><div class="loadbar flex-1"></div><span id="progStatus" class="text-xs text-onsub tabular-nums">Searching…</span></div>`:''}
+  ${spinner?`<div class="mt-5 flex items-center gap-3"><div class="loadbar flex-1"></div><span id="progStatus" class="text-xs text-onsub tabular-nums">${allResults&&allResults.length?'Filling in — browse as they land…':'Searching…'}</span></div>`:''}
   <div class="flex items-center justify-between mt-5 mb-3 flex-wrap gap-2">
-    <h2 class="text-base font-semibold text-onsub">${spinner?'Searching…':`<span class="text-accent">${shown.length}</span> results${state.q?` for “${esc(state.q)}”`:''}${!subs.length?'':myServicesOn?` · your services`:myCh.length?` · ${myCh.length} service${myCh.length>1?'s':''}`:''}${state.streamOnly?' · you can stream':''}${state.freeOnly?' · free only':''}`}</h2>
+    <h2 class="text-base font-semibold text-onsub">${spinner?(allResults&&allResults.length?`Filling in… <span class="text-accent">${shown.length}</span> so far`:'Searching…'):`<span class="text-accent">${shown.length}</span> results${state.q?` for “${esc(state.q)}”`:''}${!subs.length?'':myServicesOn?` · your services`:myCh.length?` · ${myCh.length} service${myCh.length>1?'s':''}`:''}${state.streamOnly?' · you can stream':''}${state.freeOnly?' · free only':''}`}</h2>
     ${spinner?'':`<label class="flex items-center gap-2 text-xs cursor-pointer select-none">
       <span class="text-onmute uppercase tracking-wide text-[11px]">Sort by</span>
       <select id="sort" class="field border border-line rounded-lg px-2.5 py-1.5 text-xs">

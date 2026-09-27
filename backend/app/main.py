@@ -108,6 +108,11 @@ def _progress(key: str, **fields) -> None:
     p = PROGRESS.setdefault(key, {})
     p.update(fields)
     p["_t"] = time.time()
+    # partial_ready: the frontend re-serialises this snapshot to its clients on every
+    # change, so keep the size honest (drop superseded snapshots).
+    pr = p.get("partial_results")
+    if isinstance(pr, list) and len(pr) > 80:
+        p["partial_results"] = pr[-80:]
 
 
 def set_tmdb_key(key: str | None, v4_key: str | None = None) -> None:
@@ -712,10 +717,13 @@ def _tpath(kind: str) -> str:
     return "tv" if kind == "show" else "movie"
 
 
-async def _gather_bounded(coros, limit: int = 24, *, progress_key: str | None = None, progress_phase: str | None = None, progress_total: int | None = None) -> None:
+async def _gather_bounded(coros, limit: int = 24, *, progress_key: str | None = None, progress_phase: str | None = None, progress_total: int | None = None, results: list | None = None) -> None:
     """Run coroutines with a cap on simultaneous HTTP calls (avoids rate-limit
     spikes when enriching a large pool). If a progress_key is given, reports a
-    running count for the UI's live 'pulling N…' indicator."""
+    running count for the UI's live 'pulling N…' indicator. If `results` is the
+    page being enriched, a growing snapshot of the completed items is exposed on
+    the same progress channel (partial_results) so the client can render cards
+    as they finish instead of waiting for the whole batch."""
     sem = asyncio.Semaphore(limit)
     total = len(coros)
     done = 0
@@ -726,6 +734,8 @@ async def _gather_bounded(coros, limit: int = 24, *, progress_key: str | None = 
     prev = PROGRESS.get(progress_key, {}).get("done", 0) if progress_key else 0
     if progress_key:
         _progress(progress_key, phase=progress_phase or "working", done=prev, total=t0)
+        if results is not None:
+            _progress(progress_key, partial_results=[r.to_dict() for r in results])
 
     async def run(c):
         nonlocal done
@@ -736,8 +746,11 @@ async def _gather_bounded(coros, limit: int = 24, *, progress_key: str | None = 
                 log.debug("bounded gather: %s", e)
             finally:
                 done += 1
+                f = {"phase": progress_phase or "working", "done": max(prev, done), "total": t0}
+                if results is not None:
+                    f["partial_results"] = [r.to_dict() for r in results]
                 if progress_key:
-                    _progress(progress_key, phase=progress_phase or "working", done=max(prev, done), total=t0)
+                    _progress(progress_key, **f)
 
     await asyncio.gather(*(run(c) for c in coros))
     if progress_key:
@@ -1187,10 +1200,13 @@ async def search(
     # Enrich only the page the user sees (RT was just attached to the whole pool).
     need_providers = bool(q.channels) or q.stream_only or q.free_only or q.where
     if settings.tmdb_enabled and (tmdb_key() or tmdb_v4_key()):
+        # results=filtered exposes a growing snapshot (partial_results) on the
+        # progress channel, so the client can render each card as its cast and
+        # where-to-watch data land — no need to wait for the whole batch.
         await _gather_bounded(
             [asyncio.gather(*([_attach_providers(r)] if need_providers else []) + [_attach_cast(r)])
              for r in filtered],
-            8, progress_key=pid, progress_phase="finishing", progress_total=len(filtered))
+            8, progress_key=pid, progress_phase="finishing", progress_total=len(filtered), results=filtered)
     # "Free" (the user's meaning) = included in a service you already pay for, i.e. it
     # costs nothing *extra*. Kept when the title is on one of the user's ticked
     # subscriptions (any channel type — a free-to-air service you "have" also counts)

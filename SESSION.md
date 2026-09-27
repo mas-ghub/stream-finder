@@ -5,6 +5,31 @@ Last updated: the "Chrome local-network block → permission flow" session.
 
 ## FUTURE IDEA (user, not now): host without depending on the Mac staying on/awake/logged in (e.g. always-on hosting). Mac currently needs: plugged in, lid open, logged in. `sudo pmset -c sleep 0` applied (display sleep still 10 min).
 
+## v1.55 (current): cards stream in as they load + "waking up" screen (usable while loading)
+User: "bring the cards in as it finds them… keep doing its bit in the background; if the user
+chooses something that needs loading them all, stop the background task." Implemented + **verified live**:
+- **Backend (`main.py`):** `_gather_bounded(..., results=filtered)` exposes a growing
+  `partial_results` snapshot on the existing `PROGRESS` channel (capped at 80 per poll) while the
+  finishing phase attaches cast + where-to-watch. `/api/progress` returns it. Verified on the real
+  8443 server: 247-result Netflix browse → `partial=80` appeared at t≈7s, mid-`finishing`.
+- **Frontend (`index.html`):** `doSearch`'s 500ms progress poll now also calls `streamPartial()` —
+  merges the snapshot into `allResults` (dedup by `tmdb_id`/title+kind) and re-renders in place, so
+  the grid fills in while the rest loads. On the final response it **merges (not replaces)** so the
+  streamed cast/provider data isn't lost. A slow **background poll (2s) continues after the response**
+  until `phase==='done'`, and **auto-stops the moment a newer `doSearch()` runs** (any user action
+  that needs a fresh load bumps `searchSeq` + aborts). Header/`#progStatus` copy: "Filling in — browse
+  as they land…"; the "Add key →" button is replaced by the "Waking up the server, please wait…"
+  animation while the cloud wakes. `APP_VERSION` → **1.55**.
+- **Also in this branch (v1.54):** fixed `ReferenceError: Can't find variable: results` on
+  openDetail/showSubs (was a stale global renamed to `allResults`).
+- **Deploy note:** backend changes need a server restart — `launchctl kickstart -k gui/$(id -u)/
+  com.masparrow.stream-finder` (+ `.lan`). Frontend is served from disk (refresh) AND on Render
+  (push → auto-deploy).
+- **Open:** the Tailscale funnel (:10000 "ANYWHERE") is DOWN (`/tmp/sf_port4443.log` shows a cert
+  FileNotFoundError — `certs/` seems missing/stale); family 8443 is UP. The Render backend (cloud,
+  used by the Pages site) still runs the pre-v1.55 backend until the next Render deploy of the
+  backend — so partial-streaming is live on the Mac backends now; Render gets it on next push.
+
 ## v1.53 (current): single shared backend + correct local sorts
 - **Every device now uses the shared cloud (Render) backend** — `backendCandidates()` puts `RENDER_API` last-but-default (only a `?backend=` or stored override precedes it); `resolveBackend()` no longer special-cases `onMac()`; initial `API = RENDER_API`. Goal: phone + Mac return IDENTICAL results/counts. **UNRESOLVED: user reports it still differs (phone 444 / Mac 504) even on v1.53.** Prime suspect left for tomorrow: the Mac's `localStorage['sf_backend']` still holds the OLD local URL (192.168.0.59 / 127.0.0.1) from before — `backendCandidates()` pushes the stored value BEFORE the cloud, so the Mac keeps using its own backend. Fix: clear `sf_backend` (or force cloud-first), and verify which base URL each device actually hits (the error banner + Settings→Backend field show it).
 - **Local sorts fixed (v1.52):** `sortResults` rewritten with explicit best/worst comparators — every order-style sort is descending-first, no-value sinks, equal values keep backend order (index tiebreak). Year (newest/oldest) correct. Full set (≤300) kept in memory → all re-sorts instant, no refetch. "Max results" caps display only.
