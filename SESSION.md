@@ -5,7 +5,20 @@ Last updated: the "Chrome local-network block → permission flow" session.
 
 ## FUTURE IDEA (user, not now): host without depending on the Mac staying on/awake/logged in (e.g. always-on hosting). Mac currently needs: plugged in, lid open, logged in. `sudo pmset -c sleep 0` applied (display sleep still 10 min).
 
-## v1.62 (current): Sky matches all its channels (Cinema / Showcase / Go)
+## v1.63 (current): card "+N services" respects the channel filter
+User: "click only Sky → why do I get Prime/Netflix/other? I should get Sky movies, Sky
+Cinema, Sky Max, Sky Atlantic…" The *results* were already Sky-only (v1.62); what looked wrong
+was each card's **"+N other services"** button (and the "✓ Stream Netflix" badge), which listed
+every service the title is *also* on — so a Sky title advertised Netflix/Prime.
+- `subsBadges` now scopes the "+N" count + top badge to the **active channel lens** (family-
+  folded, so Sky Cinema/Showcase count as in-scope Sky). With Sky selected, a title that's on
+  Sky + Netflix shows "✓ Sky · +1" (Sky family only), not "+3" (all services).
+- Frontend-only → auto-deploys. `APP_VERSION` → **1.63**; `sw.js` → `sf-shell-v35`.
+- **Note on "Sky Max":** Sky Sports Max (id 141) already maps to `sky` in v1.62. "Sky Atlantic"
+  has no distinct TMDB provider id (its content surfaces under the Sky Showcase/Cinema ids), so
+  it's included via those. Nothing new to map — they're covered by the family grouping.
+
+## v1.62: Sky matches all its channels (Cinema / Showcase / Go)
 User: "click Sky → no info; others are fine; sky should look at all sky channels." Root cause:
 Sky's sub-brands carry their **own** channel ids (`sky_cinema`, `sky_showcase`, `sky_go`), so a
 "Sky" filter (id `sky`) only matched the core `sky` id and missed the sub-brands.

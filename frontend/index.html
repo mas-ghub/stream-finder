@@ -317,7 +317,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.62';
+const APP_VERSION = '1.63';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn() };
@@ -720,20 +720,25 @@ function ratingBadges(r){
 
 function subsBadges(r){
   const have=new Set(getHousehold());
-  const active=new Set(getChannels());
+  // The channel lens the results are actually filtered by (same source as the grid).
+  // Family-fold it so "Sky" also counts Sky Cinema / Showcase / Go as in-scope.
+  const active=new Set(lensChannels().map(channelFamily));
   let subs=(r.platforms||[]).filter(p=>p.type==='flatrate'||p.type==='free');
   const seen=new Set(); const rows=[];
   subs.forEach(p=>{
     const nm=p.channel_name||p.provider; if(seen.has(nm)) return; seen.add(nm);
     const cid=p.channel||channelFor(p);
-    rows.push({nm, cid, mine: !!(cid && have.has(cid)), inScope: !active.size || (cid && active.has(cid))});
+    rows.push({nm, cid, mine: !!(cid && have.has(cid)), inScope: !active.size || (cid && active.has(channelFamily(cid)))});
   });
   // Card shows ONE badge — a service the user has (preferring the one they filtered by) —
-  // plus a "+N" button that opens the full list. Everything else lives in that popup.
+  // plus a "+N" button. When a channel filter is active, the "+N" counts only services
+  // within that filter, so a Sky browse doesn't advertise Netflix/Prime (the title
+  // *is* a Sky title; it just also happens to live elsewhere).
   rows.sort((a,b)=> (b.mine?2:0)+(b.inScope?1:0) - ((a.mine?2:0)+(a.inScope?1:0)));
-  const top = rows.length && rows[0].mine ? rows[0] : null;
-  const extra = rows.length - (top?1:0);
-  if(!rows.length) return '';
+  const visible = active.size ? rows.filter(x=>x.inScope) : rows;
+  const top = visible.length && visible[0].mine ? visible[0] : (visible.length ? visible[0] : null);
+  const extra = visible.length - (top?1:0);
+  if(!visible.length) return '';
   const one = top ? (()=>{ const col=PROV_COLOR[top.nm]||'#475569';
     return `<span class="text-[11px] px-2 py-1 rounded-md font-bold leading-tight" style="background:${col};color:#fff;border:2px solid #22c55e;box-shadow:0 1px 3px rgba(0,0,0,.45)" title="${esc(top.nm)} — you have this">✓ ${esc(top.nm)}</span>`; })() : '';
   const more = extra>0 ? `<button data-subs data-t="${esc(r.title)}" data-k="${esc(r.kind)}" class="text-[11px] px-2 py-1 rounded-md font-bold leading-tight" style="background:#1e293b;color:#fff;border:2px solid rgba(255,255,255,.6)">${top?'+'+extra:extra+' other service'+(extra>1?'s':'')}</button>` : '';
