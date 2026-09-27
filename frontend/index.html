@@ -317,10 +317,10 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.55';
+const APP_VERSION = '1.56';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
-let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false };
+let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false };
 // Full result set from the last fetch. Sorts (incl. RT) happen locally against this —
 // a re-sort reshuffles what's loaded instead of refetching (the backend sorts the pool).
 let allResults = [];
@@ -512,6 +512,7 @@ async function doSearch(){
     // (mirrors the client's Settings → Your subscriptions).
     getHousehold().forEach(c=>p.append('household', c));
   }
+  if(state.englishOnly) p.set('english_only', 'true');
   const hd=tmdbHeaders();
   // Live progress: give the backend an id; poll it while the search runs so the
   // UI can show "pulling N of M…" instead of an infinite spinner.
@@ -775,6 +776,7 @@ function render(spinner){
   if(whereOn) shown = shown.filter(r => (r.platforms||[]).length>0);
   if(state.streamOnly) shown = shown.filter(r => classify(r.platforms).status === 'free');
   if(state.freeOnly) shown = shown.filter(r => classify(r.platforms).noExtra);
+  if(state.englishOnly) shown = shown.filter(r => (r.language||'').toLowerCase()==='en');
   // Channel selection on the main screen: keep only titles on the picked services.
   const sel=new Set(myCh);
   if(sel.size) shown = shown.filter(r => { const have=new Set((r.platforms||[]).map(p=>p.channel)); for(const c of have){ if(sel.has(c)) return true; } return false; });
@@ -840,6 +842,7 @@ function render(spinner){
       <label class="flex items-center gap-1.5 text-xs cursor-pointer select-none"><input type="checkbox" id="minRt" ${state.minRt?'checked':''} class="accent-red-500 w-3.5 h-3.5"/> <span class="${state.minRt?'text-red-400 font-semibold':'text-onsub'}">🍅 rated</span></label>
       <label class="flex items-center gap-1.5 text-xs cursor-pointer select-none"><input type="checkbox" id="streamOnly" ${state.streamOnly?'checked':''} class="accent-green-500 w-3.5 h-3.5"/> <span class="${state.streamOnly?'text-green-400 font-semibold':'text-onsub'}">I can stream</span></label>
       <label class="flex items-center gap-1.5 text-xs cursor-pointer select-none" title="Only titles you can watch for nothing extra — included in a service you have, or on a free service. Excludes rent/buy (Sky Store, Apple TV Store, Prime pay-movies)."><input type="checkbox" id="freeOnly" ${state.freeOnly?'checked':''} class="accent-cyan-400 w-3.5 h-3.5"/> <span class="${state.freeOnly?'text-cyan-300 font-semibold':'text-onsub'}">Free only</span></label>
+      <label class="flex items-center gap-1.5 text-xs cursor-pointer select-none" title="Only titles originally produced in English (drops foreign-language films and shows)."><input type="checkbox" id="englishOnly" ${state.englishOnly?'checked':''} class="accent-blue-500 w-3.5 h-3.5"/> <span class="${state.englishOnly?'text-blue-400 font-semibold':'text-onsub'}">English only</span></label>
       <button id="go" class="bg-accent hover:bg-red-700 px-5 py-1.5 rounded-xl text-xs font-semibold">Search</button>
       <button id="clear" class="px-3 py-1.5 rounded-xl chip text-xs text-onsub">Reset</button>
     </div>
@@ -859,7 +862,7 @@ function render(spinner){
 
   ${spinner?`<div class="mt-5 flex items-center gap-3"><div class="loadbar flex-1"></div><span id="progStatus" class="text-xs text-onsub tabular-nums">${allResults&&allResults.length?'Filling in — browse as they land…':'Searching…'}</span></div>`:''}
   <div class="flex items-center justify-between mt-5 mb-3 flex-wrap gap-2">
-    <h2 class="text-base font-semibold text-onsub">${spinner?(allResults&&allResults.length?`Filling in… <span class="text-accent">${shown.length}</span> so far`:'Searching…'):`<span class="text-accent">${shown.length}</span> results${state.q?` for “${esc(state.q)}”`:''}${!subs.length?'':myServicesOn?` · your services`:myCh.length?` · ${myCh.length} service${myCh.length>1?'s':''}`:''}${state.streamOnly?' · you can stream':''}${state.freeOnly?' · free only':''}`}</h2>
+    <h2 class="text-base font-semibold text-onsub">${spinner?(allResults&&allResults.length?`Filling in… <span class="text-accent">${shown.length}</span> so far`:'Searching…'):`<span class="text-accent">${shown.length}</span> results${state.q?` for “${esc(state.q)}”`:''}${!subs.length?'':myServicesOn?` · your services`:myCh.length?` · ${myCh.length} service${myCh.length>1?'s':''}`:''}${state.streamOnly?' · you can stream':''}${state.freeOnly?' · free only':''}${state.englishOnly?' · English only':''}`}</h2>
     ${spinner?'':`<label class="flex items-center gap-2 text-xs cursor-pointer select-none">
       <span class="text-onmute uppercase tracking-wide text-[11px]">Sort by</span>
       <select id="sort" class="field border border-line rounded-lg px-2.5 py-1.5 text-xs">
@@ -876,9 +879,10 @@ function render(spinner){
             ? `<div class="col-span-full text-center py-16 text-onsub"><div class="text-5xl mb-3">⚠️</div><b class="text-onfg text-lg">Couldn't reach the results server.</b><p class="mt-2 text-sm" style="color:var(--c-onsub)">It may be waking up (the free cloud backend sleeps when idle) — give it a moment, then <b>Retry</b>.</p><button id="retry2" class="mt-5 bg-amber-500 hover:bg-amber-400 text-black px-6 py-2.5 rounded-xl text-sm font-semibold">Retry</button></div>`
             : `<div class="col-span-full text-center py-20 text-onmute"><div class="text-5xl mb-3">🍿</div>
           ${state.streamOnly?'Nothing you can stream with your current subscriptions. Turn off <b class="text-onsub">I can stream</b> to see everything.':
+            (state.englishOnly?'Nothing in English matches those filters. Turn off <b class="text-onsub">English only</b> to include foreign-language titles.':
             (state.freeOnly?'Nothing you can watch for nothing extra matches those filters. Free = included in a service you have, or on a free service (not rent/buy). Turn off <b class="text-onsub">Free only</b> to see everything.':
-            (channelActive()?`Nothing on <b class="text-onsub">${channelActive()} service${channelActive()>1?'s':''}</b> matches those filters right now. Try fewer moods, a different year, or a different service.`:
-            'No matches with those filters. Try a different mood, year range, or search a specific title.'))}</div>`)}
+             (channelActive()?`Nothing on <b class="text-onsub">${channelActive()} service${channelActive()>1?'s':''}</b> matches those filters right now. Try fewer moods, a different year, or a different service.`:
+             'No matches with those filters. Try a different mood, year range, or search a specific title.')))}</div>`)}
   </div>`;
   if(_qFocus){ const q=document.getElementById('q'); if(q){ q.value=state.q; q.focus({preventScroll:true}); try{ q.setSelectionRange(_qS,_qE); }catch(e){} } }
 
@@ -895,7 +899,8 @@ function render(spinner){
   $('#streamOnly')?.addEventListener('change',e=>{state.streamOnly=e.target.checked;e.target?.nextElementSibling&&(e.target.nextElementSibling.className=state.streamOnly?'text-green-400 font-semibold':'text-onsub');render(false);});
   $('#freeOnly')?.addEventListener('change',e=>{state.freeOnly=e.target.checked;e.target?.nextElementSibling&&(e.target.nextElementSibling.className=state.freeOnly?'text-cyan-300 font-semibold':'text-onsub');doSearch();});
   $('#minRt')?.addEventListener('change',e=>{state.minRt=e.target.checked?1:0;e.target?.nextElementSibling&&(e.target.nextElementSibling.className=state.minRt?'text-red-400 font-semibold':'text-onsub');doSearch();});
-  $('#clear').addEventListener('click',()=>{ state={...state,q:'',moods:[],channels:[],yearMin:'',yearMax:'',minRating:0,minRt:0,sort:'relevance',streamOnly:false,freeOnly:false}; state.limit=100; setLimit(100); setChannels(['netflix']); myServicesOn=false; state.channels=['netflix']; render(false); doSearch(); });
+  $('#englishOnly')?.addEventListener('change',e=>{state.englishOnly=e.target.checked;e.target?.nextElementSibling&&(e.target.nextElementSibling.className=state.englishOnly?'text-blue-400 font-semibold':'text-onsub');doSearch();});
+  $('#clear').addEventListener('click',()=>{ state={...state,q:'',moods:[],channels:[],yearMin:'',yearMax:'',minRating:0,minRt:0,sort:'relevance',streamOnly:false,freeOnly:false,englishOnly:false}; state.limit=100; setLimit(100); setChannels(['netflix']); myServicesOn=false; state.channels=['netflix']; render(false); doSearch(); });
   $('#ymin')?.addEventListener('change',e=>{state.yearMin=e.target.value;doSearch();});
   $('#ymax')?.addEventListener('change',e=>{state.yearMax=e.target.value;doSearch();});
   $('#sort')?.addEventListener('change',e=>{state.sort=e.target.value;render(false);});

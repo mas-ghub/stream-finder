@@ -200,6 +200,7 @@ class Query(BaseModel):
     where: bool = False
     stream_only: bool = False
     free_only: bool = False
+    english_only: bool = False
     household: list[str] = Field(default_factory=list)
     fetch_all: bool = False
     pool: int | None = None
@@ -452,11 +453,12 @@ async def _rt_lookup(title: str, year: int | None, kind: str = "movie") -> dict:
 # ---------------------------------------------------------------------------
 # TMDB fetch
 # ---------------------------------------------------------------------------
-async def _tmdb_search(q: str, kind: str) -> list[dict]:
+async def _tmdb_search(q: str, kind: str, english_only: bool = False) -> list[dict]:
     path = {"movie": "search/movie", "show": "search/tv", "any": "search/multi"}[kind]
+    extra = {"with_origin_language": "en"} if english_only else {}
     out: list[dict] = []
     for page in (1, 2):
-        r = await _tmdb_get(f"{TMDB_BASE}/{path}", {"query": q, "include_adult": "false", "page": page})
+        r = await _tmdb_get(f"{TMDB_BASE}/{path}", {"query": q, "include_adult": "false", **extra, "page": page})
         if r.status_code == 401:
             return []
         r.raise_for_status()
@@ -464,7 +466,7 @@ async def _tmdb_search(q: str, kind: str) -> list[dict]:
     return out[:100]
 
 
-async def _tmdb_discover_pages(path: str, params: dict[str, str], max_titles: int, origin_country: str | None = None, progress_id: str | None = None) -> list[dict]:
+async def _tmdb_discover_pages(path: str, params: dict[str, str], max_titles: int, origin_country: str | None = None, progress_id: str | None = None, english_only: bool = False) -> list[dict]:
     """Page through one discover query (single genre, or no genre) up to max_titles.
     A 401 (bad key) short-circuits the whole search, so it aborts early."""
     p = dict(params)
@@ -472,6 +474,10 @@ async def _tmdb_discover_pages(path: str, params: dict[str, str], max_titles: in
         p["with_origin_country"] = origin_country
         p["sort_by"] = "popularity.desc"
         p["vote_count.gte"] = "10"
+    if english_only:
+        # TMDB's with_origin_language filters on ORIGINAL language, so "en" = made
+        # in English (this is the "English only" the user asked for, not dubbed).
+        p["with_origin_language"] = "en"
     out: list[dict] = []
     pages = min((max_titles + 19) // 20, 30)  # 20 per page, cap ~600
     for page in range(1, pages + 1):
@@ -489,7 +495,7 @@ async def _tmdb_discover_pages(path: str, params: dict[str, str], max_titles: in
     return out
 
 
-async def _tmdb_discover(kind: str, genres: list[str], year_min: int | None = None, year_max: int | None = None, max_titles: int = 120, origin_country: str | None = None, channels: list[str] | None = None, progress_id: str | None = None) -> list[dict]:
+async def _tmdb_discover(kind: str, genres: list[str], year_min: int | None = None, year_max: int | None = None, max_titles: int = 120, origin_country: str | None = None, channels: list[str] | None = None, progress_id: str | None = None, english_only: bool = False) -> list[dict]:
     gids = sorted({_GENRE_IDS[kind].get(normalize_genre(g) or g) for g in genres} - {None})
     path = "discover/movie" if kind == "movie" else "discover/tv"
     dkey = "primary_release_date" if kind == "movie" else "first_air_date"
@@ -498,6 +504,8 @@ async def _tmdb_discover(kind: str, genres: list[str], year_min: int | None = No
         base[f"{dkey}.gte"] = f"{int(year_min)}-01-01"
     if year_max:
         base[f"{dkey}.lte"] = f"{int(year_max)}-12-31"
+    if english_only:
+        base["with_origin_language"] = "en"
     # TMDB's `with_genres` is AND (a title must carry every listed genre), so picking
     # several genres/moods collapses the pool to near-empty. We want OR (union): pull
     # each selected genre separately, then merge + dedup. One genre -> a single query
@@ -507,7 +515,7 @@ async def _tmdb_discover(kind: str, genres: list[str], year_min: int | None = No
         _progress(progress_id, phase="pulled", done=0, total=max_titles)
     per_bucket = max(40, max_titles // len(buckets))  # keep total requests bounded
     chunks = await asyncio.gather(*[
-        _tmdb_discover_pages(path, params, per_bucket, origin_country, progress_id)
+        _tmdb_discover_pages(path, params, per_bucket, origin_country, progress_id, english_only)
         for params in buckets
     ], return_exceptions=True)
     seen: dict[int, dict] = {}
@@ -851,6 +859,11 @@ def _apply_filters(results: list[Result], q: Query) -> list[Result]:
             continue
         if q.year_max and (r.year or 9999) > q.year_max:
             continue
+        # English-only: a title whose original language is known must be English.
+        # Titles with no language recorded (e.g. TVMaze results) are kept — we can't
+        # prove they're foreign, and the TMDB pools are already language-filtered.
+        if q.english_only and (r.language or "").lower() not in ("", "en"):
+            continue
         if q.min_rating and (r.ratings.tmdb_vote if r.ratings else None) is not None and (r.ratings.tmdb_vote or 0) < q.min_rating:
             continue
         if q.min_rt:
@@ -1063,6 +1076,7 @@ async def search(
     where: bool = False,
     stream_only: bool = False,
     free_only: bool = False,
+    english_only: bool = False,
     household: list[str] = FQuery(default=[]),
     fetch_all: bool = False,
     pool: int | None = None,
@@ -1078,8 +1092,8 @@ async def search(
     q = Query(q=q, kind=kind, genres=genres, mood=mood, year_min=year_min,
               year_max=year_max, min_rating=min_rating, min_rt=min_rt,
               channels=channels, where=where, stream_only=stream_only,
-              free_only=free_only, household=household, fetch_all=fetch_all,
-              pool=pool, sort=sort, limit=limit)
+              free_only=free_only, english_only=english_only, household=household,
+              fetch_all=fetch_all, pool=pool, sort=sort, limit=limit)
     tmdb_on = settings.tmdb_enabled and bool(tmdb_key())
     pid = progress_id  # key for the live progress the frontend polls
     if pid:
@@ -1092,8 +1106,11 @@ async def search(
     tasks: list[tuple] = []
     if q.q:
         if tmdb_on:
-            tasks.append(("tmdb", q.kind, _tmdb_search(q.q, q.kind)))
-        if q.kind in ("show", "any") and not tmdb_only:
+            tasks.append(("tmdb", q.kind, _tmdb_search(q.q, q.kind, q.english_only)))
+        if q.kind in ("show", "any") and not tmdb_only and not q.english_only:
+            # TVMaze has no origin-language filter, so an English-only search uses
+            # TMDB alone (it filters with_origin_language=en); otherwise TVMaze backs
+            # the shows side with zero config.
             tasks.append(("tvmaze", None, _tvmaze_search(q.q, q.q)))
         if not tasks:
             tasks.append(("tvmaze", None, _tvmaze_search(q.q)))
@@ -1116,8 +1133,11 @@ async def search(
                 base_pool = min(max(q.pool, 200), settings.fetch_all_pool)
             max_t = base_pool // len(dks)
             for dk in dks:
-                tasks.append(("tmdb", dk, _tmdb_discover(dk, q.genres, year_min, year_max, max_t, oc, q.channels, pid)))
-        if not tmdb_only:
+                tasks.append(("tmdb", dk, _tmdb_discover(dk, q.genres, year_min, year_max, max_t, oc, q.channels, pid, q.english_only)))
+        if not tmdb_only and not q.english_only:
+            # English-only browse: TVMaze has no language filter and its discover is
+            # unfiltered, so it would dilute the pool — use the (language-filtered)
+            # TMDB pools only.
             tasks.append(("tvmaze", None, _tvmaze_discover()))
 
     batched = await asyncio.gather(*(coro for _, _, coro in tasks), return_exceptions=True)
