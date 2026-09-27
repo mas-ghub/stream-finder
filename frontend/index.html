@@ -317,7 +317,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.60';
+const APP_VERSION = '1.61';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn() };
@@ -988,7 +988,7 @@ function openDetail(title, kind){
   if(!r) return;
   const m=$('#modal');
   m.innerHTML = `<div class="fixed inset-0 z-50 overflow-y-auto overscroll-contain" style="-webkit-overflow-scrolling:touch"><div class="absolute bg-black/80 backdrop-blur-sm" style="position:fixed;inset:0"></div><div class="relative min-h-full flex items-center justify-center p-4 pb-24" data-close>
-    <div class="relative z-10 w-full max-w-3xl rounded-2xl border border-line bg-ink fade">
+    <div class="relative z-10 w-full max-w-3xl rounded-2xl border border-line bg-ink overflow-hidden fade">
       <div class="relative h-56 md:h-72" style="${posterBg(r)}"><button class="absolute top-3 right-3 z-10 w-9 h-9 rounded-full bg-black/60 text-white/80 hover:bg-black/80" data-x>✕</button></div>
       <div id="detailBody" class="p-5 md:p-7 -mt-16 relative" style="background:var(--c-panel)">
         <div class="text-onsub text-xs uppercase tracking-widest">${r.kind==='movie'?'Film':'Series'}</div>
