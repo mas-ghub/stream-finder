@@ -5,7 +5,24 @@ Last updated: the "Chrome local-network block → permission flow" session.
 
 ## FUTURE IDEA (user, not now): host without depending on the Mac staying on/awake/logged in (e.g. always-on hosting). Mac currently needs: plugged in, lid open, logged in. `sudo pmset -c sleep 0` applied (display sleep still 10 min).
 
-## v1.55 (current): cards stream in as they load + "waking up" screen (usable while loading)
+## v1.56 (current): "English only" filter
+User: "we're not using Tailscale for this app (it's Pages + Render) — and add a checkbox for
+English-language only." (The Tailscale `:10000` "ANYWHERE" route in status.sh/README is now
+vestigial for this app — the public path is the Pages site → Render backend. The 4443 funnel
+cert failure in `/tmp/sf_port4443.log` can be ignored for this app.)
+- **`english_only`** (backend `main.py`): new `Query` field + route param. TMDB search + discover
+  get `with_origin_language=en` (ORIGINAL language — "made in English", not "dubbed"); TVMaze is
+  excluded when it's on (it has no language filter) so it can't dilute the pool; `_apply_filters`
+  backstops by dropping results whose recorded language isn't `en` (unknown/`?` kept, so TVMaze
+  results in a mixed search survive). Verified live on 8443: movie browse 120→62 (all `en`);
+  "batman" 37→34 (ja/es dropped); "parasite" (Korean) → all-`en` matches only.
+- **Frontend:** ☑️ **English only** checkbox (filter row, next to Free only) → `state.englishOnly`
+  → `english_only=true`; client-side filter (`language==='en'`) for instant local re-render;
+  "· English only" in the results header; its own empty-state message; cleared on Reset.
+  `APP_VERSION` → **1.56**; `sw.js` cache → `sf-shell-v28`.
+- Deployed: Mac backends restarted (launchctl); pushed → Render (backend) + Pages (frontend).
+
+## v1.55: cards stream in as they load + "waking up" screen (usable while loading)
 User: "bring the cards in as it finds them… keep doing its bit in the background; if the user
 chooses something that needs loading them all, stop the background task." Implemented + **verified live**:
 - **Backend (`main.py`):** `_gather_bounded(..., results=filtered)` exposes a growing
