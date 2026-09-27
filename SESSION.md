@@ -5,24 +5,35 @@ Last updated: the "Chrome local-network block → permission flow" session.
 
 ## FUTURE IDEA (user, not now): host without depending on the Mac staying on/awake/logged in (e.g. always-on hosting). Mac currently needs: plugged in, lid open, logged in. `sudo pmset -c sleep 0` applied (display sleep still 10 min).
 
-## v1.57 (current): Rotten Tomatoes OFF by default (the "Reading ratings" step)
+## v1.58 (current): PWA auto-updates when online + RT is per-person
+**PWA not refreshing:** user reported the installed app "does not refresh the version… it should
+automatically when online." Root cause: the service worker is network-first *design-wise*, but an
+**installed PWA that had cached an old `sw.js`** served the stale worker from cache and never
+detected the new deploy, so it stayed on an old build. Fixes:
+- `sw.js` → **`sf-shell-v30`** (bumps cache so a new worker installs + `skipWaiting`/`claim`).
+- `sw.js` is no longer in the pre-cache `SHELL` list, and its fetch path is now **network-only**
+  (cache is written as a *backup* but a failed `sw.js` fetch rejects rather than serving a stale
+  cached copy). This guarantees an update is always detected even if the cached sw.js is old.
+- `APP_VERSION` → **1.58**. Deployed to Pages; installed apps update on next open.
+**RT per-person (follow-up to v1.57):** the first v1.57 made the RT on/off a *shared backend
+global* — a bug (one person flipping Settings changed it for everyone). Corrected: RT on/off is
+now **strictly per-person** — the client stores it in `localStorage sf_rt` and sends `rt_off` on
+each of *its own* searches; the backend global `rt_enabled` stays **on** and `set_keys` no longer
+accepts `rt_off` (so it can't flip the global). When RT is **on**, the UI shows an amber notice
+("searches take a little longer") + the progress label says "(this takes longer)".
+- `APP_VERSION`/`sw.js` bump above; `GET /api/keys` now echoes `rt_enabled` (master switch,
+  for ops). `APP_VERSION` → **1.58**.
+
+## v1.57: Rotten Tomatoes OFF by default (the "Reading ratings" step)
 User: "when I watch it, reading ratings takes a long time — what is that? If it's RT we can
 skip it." Answer: it's the **Rotten Tomatoes scrape** (🍅 Tomatometer + 🍿 audience) — slow
 because Render has **no Serper key**, so each title's RT URL is a guessed slug that often 404s
 (12s timeout each), across the whole pool at 10-at-a-time.
 - **Now OFF by default.** `rt_off` (new `Query`/route param; frontend `state.rtOn` defaults
   false, persisted per-device in `sf_rt`). When off: the backend skips BOTH RT-attach blocks,
-  and RT/min-RT *filters* + RT sorts become no-ops (so a title without a score isn't wrongly
-  dropped; an RT sort falls back to relevance). Verified live on Render: plain movie browse
-  **42s → 35s** and the `ratings` phase disappears (phase timeline `pulled` only).
-- **Settings:** "Rotten Tomatoes ratings" on/off switch (default off) above the Serper field.
-  Save persists it per-device; if the box was flipped it also POSTs `rt_off` so the shared
-  backend matches. **Note:** on the shared Render backend this currently makes RT off for
-  *everyone* (a per-user server setting can't be done cleanly) — acceptable since off is the
-  default; per-device state is authoritative for the UI. Warns "add a free Serper key for
-  reliable TV ratings" when RT is on without one.
-- `APP_VERSION` → **1.57**; `sw.js` → `sf-shell-v29`. Deployed (Mac restarted; Render set
-  RT-off via `POST /api/keys {rt_off:true}`; Pages + Render auto-deployed).
+  and RT/min-RT *filters* + RT sorts become no-ops. Verified live on Render: plain browse
+  **42s → 35s** and the `ratings` phase disappears. ⚠️ The *global* part of this (the `rt_off`
+  in `set_keys` + Render set to off) was **superseded by v1.58** — RT on/off is now per-person.
 
 ## v1.56: "English only" filter
 User: "we're not using Tailscale for this app (it's Pages + Render) — and add a checkbox for
