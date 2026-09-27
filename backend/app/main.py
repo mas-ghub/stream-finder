@@ -1183,22 +1183,34 @@ async def search(
     # Cap the pool at the requested page size BEFORE the (expensive) provider
     # lookup: we only need provider data for the titles the user will actually
     # see. A 1000-result browse therefore costs ~100 provider calls, not ~1500.
-    limit = min(max(1, q.limit), settings.max_results)
+    # limit 0 = "All" (no display cap). The backend still returns its full pool; the
+    # client shows all of it. For provider/rating lookups we cap separately below.
+    limit = max(0, q.limit) if q.limit else 0
+    limit = min(limit, settings.max_results)
     # RT / min-rating sorts need ratings to be meaningful, so keep the wider pool
     # for those; every other path is pre-capped to the page.
     rt_sort = q.sort in ("rt_critic", "rt_audience")
-    if not (q.channels or rt_sort):
+    if limit > 0 and not (q.channels or rt_sort):
         results = _sort(results, q)[:limit]
 
     # Channel filter needs provider data, so attach it (in parallel) BEFORE the
     # other filters run. Otherwise the RT/min-rating filters (which drop titles
     # with no rating yet) would shrink the pool before the channel filter sees it.
     if q.channels and settings.tmdb_enabled and (tmdb_key() or tmdb_v4_key()):
+        # Only the top `limit` of the (service-pre-filtered, popularity-sorted) pool
+        # actually survive to the page, so only THOSE need provider data. Capping here
+        # (instead of scanning the whole ~1000 pool) is the main cold-start win: a
+        # 50-result Netflix browse fetches ~50 provider lookups, not ~500. An "All"
+        # size (limit 0) checks the whole pool (the provider cache makes it cheap once
+        # warm, and a low-hit-rate service like Netflix can have its hits scattered
+        # deep, so we can't safely truncate for an unbounded "All").
+        prov_limit = limit if limit > 0 else len(results)
+        prov_target = results[:prov_limit]
         if pid:
-            _progress(pid, phase="providers", done=0, total=len(results))
-        await _gather_bounded([_resolve_tmdb_id(r) for r in results if not r.tmdb_id])
-        await _gather_bounded([_attach_providers(r) for r in results if r.tmdb_id], 100,
-                              progress_key=pid, progress_phase="providers", progress_total=len(results))
+            _progress(pid, phase="providers", done=0, total=len(prov_target))
+        await _gather_bounded([_resolve_tmdb_id(r) for r in prov_target if not r.tmdb_id])
+        await _gather_bounded([_attach_providers(r) for r in prov_target if r.tmdb_id], 100,
+                              progress_key=pid, progress_phase="providers", progress_total=len(prov_target))
     if rt_sort or q.min_rt or q.min_rating:
         # RT / min-rating filtering needs rating data: RT is attached to the whole
         # pool first (capped at 200 for speed; the cache makes re-sorts free), then
@@ -1225,7 +1237,8 @@ async def search(
         await _gather_bounded([_attach_rt(r) for r in pool if r.title], 10,
                               progress_key=pid, progress_phase="ratings", progress_total=len(pool))
     ordered = _sort(pool, q)
-    filtered = ordered[:limit]
+    # limit 0 = "All": return the whole (filtered) pool; otherwise the top `limit`.
+    filtered = ordered if limit <= 0 else ordered[:limit]
     if pid:
         _progress(pid, phase="finishing", done=0, total=len(filtered))
     # Enrich only the page the user sees (RT was just attached to the whole pool).
