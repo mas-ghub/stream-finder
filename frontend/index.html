@@ -402,7 +402,8 @@ function getLimit(){ try{ const v=parseInt(localStorage.getItem('sf_max_results'
 // Rotten Tomatoes ratings: OFF by default — the backend spends a while scraping RT
 // per title (the "Reading ratings…" step), so we skip it unless the user turns it on.
 function rtOn(){ try{ return localStorage.getItem('sf_rt')==='1'; }catch(e){ return false; } }
-function setRtOn(on){ try{ localStorage.setItem('sf_rt', on?'1':'0'); }catch(e){} }
+function setRtOn(on){ try{ localStorage.setItem('sf_rt', on?'1':'0'); }catch(e){} try{ sessionStorage.removeItem('sf_rt_notice'); }catch(e){} }
+function rtNoticeDismissed(){ try{ return sessionStorage.getItem('sf_rt_notice')==='1'; }catch(e){ return false; } }
 function setLimit(v){ try{ localStorage.setItem('sf_max_results', String(Math.min(Math.max(1,v),1000))); }catch(e){} }
 
 // Map a provider onto a known channel id (mirror of backend channels.py).
@@ -523,7 +524,10 @@ async function doSearch(){
   // UI can show "pulling N of M…" instead of an infinite spinner.
   const pid='s'+Date.now().toString(36);
   p.set('progress_id', pid);
-  const phaseLabels={starting:'Starting…',pulled:t=>`Pulling… ${t[0]||0} of ${t[1]||''} titles`,providers:t=>`Checking where it streams… ${t[0]||0}/${t[1]||''}`,checking:t=>`Checking where it streams… ${t[0]||0}/${t[1]||''}`,ratings:t=>`Reading ratings… ${t[0]||0}/${t[1]||''}`,finishing:t=>`Filling in details… ${t[0]||0}/${t[1]||''} — browse as they land`,done:'Done'};
+  // When Rotten Tomatoes is ON (a per-person choice), the "Reading ratings" step is
+  // the slow one — say so explicitly so the longer wait looks intentional, not stuck.
+  const _rt = state.rtOn;
+  const phaseLabels={starting:'Starting…',pulled:t=>`Pulling… ${t[0]||0} of ${t[1]||''} titles`,providers:t=>`Checking where it streams… ${t[0]||0}/${t[1]||''}`,checking:t=>`Checking where it streams… ${t[0]||0}/${t[1]||''}`,ratings:t=>_rt?`Reading Rotten Tomatoes ratings… ${t[0]||0}/${t[1]||''} (this takes longer)`:`Reading ratings… ${t[0]||0}/${t[1]||''}`,finishing:t=>`Filling in details… ${t[0]||0}/${t[1]||''} — browse as they land`,done:'Done'};
   let stopProgress=false;
   const progEl=()=>document.getElementById('progStatus');
   // Cards stream in as the backend enriches them (cast + where-to-watch per title).
@@ -782,7 +786,8 @@ function render(spinner){
   if(state.streamOnly) shown = shown.filter(r => classify(r.platforms).status === 'free');
   if(state.freeOnly) shown = shown.filter(r => classify(r.platforms).noExtra);
   if(state.englishOnly) shown = shown.filter(r => (r.language||'').toLowerCase()==='en');
-  if(!state.rtOn) shown = shown.filter(r => { const rs=r.ratings||{}; return rs.rt_tomatometer==null && rs.rt_audience==null; });
+  // (RT is a badge/sort, not a filter — so there's no client-side RT filter. When RT
+  // is off, searches simply return no tomato scores; the "🍅 rated" box is hidden.)
   // Channel selection on the main screen: keep only titles on the picked services.
   const sel=new Set(myCh);
   if(sel.size) shown = shown.filter(r => { const have=new Set((r.platforms||[]).map(p=>p.channel)); for(const c of have){ if(sel.has(c)) return true; } return false; });
@@ -845,13 +850,14 @@ function render(spinner){
       <select id="maxResults" title="Max results" class="field border border-line rounded-lg px-2 py-1.5 text-xs">
         ${[25,50,100,200,500,1000].map(n=>`<option value="${n}" ${state.limit===n?'selected':''}>${n===1000?'Up to 1000':n}</option>`).join('')}
       </select>
-      <label class="flex items-center gap-1.5 text-xs cursor-pointer select-none"><input type="checkbox" id="minRt" ${state.minRt?'checked':''} class="accent-red-500 w-3.5 h-3.5"/> <span class="${state.minRt?'text-red-400 font-semibold':'text-onsub'}">🍅 rated</span></label>
+      ${state.rtOn?`<label class="flex items-center gap-1.5 text-xs cursor-pointer select-none"><input type="checkbox" id="minRt" ${state.minRt?'checked':''} class="accent-red-500 w-3.5 h-3.5"/> <span class="${state.minRt?'text-red-400 font-semibold':'text-onsub'}">🍅 rated</span></label>`:''}
       <label class="flex items-center gap-1.5 text-xs cursor-pointer select-none"><input type="checkbox" id="streamOnly" ${state.streamOnly?'checked':''} class="accent-green-500 w-3.5 h-3.5"/> <span class="${state.streamOnly?'text-green-400 font-semibold':'text-onsub'}">I can stream</span></label>
       <label class="flex items-center gap-1.5 text-xs cursor-pointer select-none" title="Only titles you can watch for nothing extra — included in a service you have, or on a free service. Excludes rent/buy (Sky Store, Apple TV Store, Prime pay-movies)."><input type="checkbox" id="freeOnly" ${state.freeOnly?'checked':''} class="accent-cyan-400 w-3.5 h-3.5"/> <span class="${state.freeOnly?'text-cyan-300 font-semibold':'text-onsub'}">Free only</span></label>
       <label class="flex items-center gap-1.5 text-xs cursor-pointer select-none" title="Only titles originally produced in English (drops foreign-language films and shows)."><input type="checkbox" id="englishOnly" ${state.englishOnly?'checked':''} class="accent-blue-500 w-3.5 h-3.5"/> <span class="${state.englishOnly?'text-blue-400 font-semibold':'text-onsub'}">English only</span></label>
       <button id="go" class="bg-accent hover:bg-red-700 px-5 py-1.5 rounded-xl text-xs font-semibold">Search</button>
       <button id="clear" class="px-3 py-1.5 rounded-xl chip text-xs text-onsub">Reset</button>
     </div>
+    ${state.rtOn&&!rtNoticeDismissed()?`<div id="rtNotice" class="mt-2.5 flex items-center gap-2 rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-100"><span>🍅</span><span>Rotten Tomatoes ratings are on — searches take a little longer. Turn it off in <b>Settings ⚙️</b> for faster results.</span><button id="rtNoticeX" class="ml-auto opacity-70 hover:opacity-100">✕</button></div>`:''}
   </section>
 
   <!-- Channel picker (multi-select which services to look through) -->
@@ -906,6 +912,8 @@ function render(spinner){
   $('#freeOnly')?.addEventListener('change',e=>{state.freeOnly=e.target.checked;e.target?.nextElementSibling&&(e.target.nextElementSibling.className=state.freeOnly?'text-cyan-300 font-semibold':'text-onsub');doSearch();});
   $('#minRt')?.addEventListener('change',e=>{state.minRt=e.target.checked?1:0;e.target?.nextElementSibling&&(e.target.nextElementSibling.className=state.minRt?'text-red-400 font-semibold':'text-onsub');doSearch();});
   $('#englishOnly')?.addEventListener('change',e=>{state.englishOnly=e.target.checked;e.target?.nextElementSibling&&(e.target.nextElementSibling.className=state.englishOnly?'text-blue-400 font-semibold':'text-onsub');doSearch();});
+  // Dismiss the "RT is on = slower" notice (per session, until they change the setting).
+  $('#rtNoticeX')?.addEventListener('click',()=>{ try{ sessionStorage.setItem('sf_rt_notice','1'); }catch(e){} render(false); });
   $('#clear').addEventListener('click',()=>{ state={...state,q:'',moods:[],channels:[],yearMin:'',yearMax:'',minRating:0,minRt:0,sort:'relevance',streamOnly:false,freeOnly:false,englishOnly:false}; state.limit=100; setLimit(100); setChannels(['netflix']); myServicesOn=false; state.channels=['netflix']; render(false); doSearch(); });
   $('#ymin')?.addEventListener('change',e=>{state.yearMin=e.target.value;doSearch();});
   $('#ymax')?.addEventListener('change',e=>{state.yearMax=e.target.value;doSearch();});
@@ -1105,9 +1113,9 @@ async function openSettings(){
               <span class="text-xs px-2 py-0.5 rounded-full" style="background:${state.rtOn?'rgba(80,250,157,.15)':'rgba(245,197,24,.15)'};color:${state.rtOn?'#50fa9d':'#ffd866'}">${state.rtOn?'on':'off'}</span></div>
             <label class="flex items-center gap-2.5 text-sm cursor-pointer">
               <input type="checkbox" id="k_rt" ${state.rtOn?'checked':''} class="accent-red-500 w-4 h-4"/>
-              <span>Show Rotten Tomatoes ratings</span>
+              <span>Show Rotten Tomatoes ratings <span class="text-onmute text-xs">(🍅 + 🍿 badges, RT sorts)</span></span>
             </label>
-            <p class="text-xs text-onmute mt-1">Off (the default) skips the slow “Reading ratings…” scrape, so searches finish faster. Turn on for 🍅 tomato badges + RT sorts. (This applies to your device.)</p>
+            <p class="text-xs text-onmute mt-1">Off (the default) = faster searches. <b>On</b> adds the tomato badges and RT sorts but each search takes noticeably longer (a “Reading Rotten Tomatoes ratings…” step). This is <b>per person</b> — it only affects your device, not other viewers.</p>
             <div class="h-px bg-line my-4"></div>
             <div class="flex items-center justify-between mb-2"><label class="font-semibold">Serper.dev <span class="text-xs text-onmute">— optional, makes TV ratings reliable</span></label>
               <span class="text-xs px-2 py-0.5 rounded-full" style="background:${keys.serper.set?'rgba(80,250,157,.15)':'var(--chip-bg)'};color:${keys.serper.set?'#50fa9d':'var(--c-onmute)'}">${keys.serper.set?'configured':'optional'}</span></div>
@@ -1168,11 +1176,11 @@ async function openSettings(){
      if(newTm) body.tmdb_api_key=newTm;
      if(newV4) body.tmdb_v4_token=newV4;
      if(newSe) body.serper_api_key=newSe;
-     // persist the Rotten Tomatoes preference (this device). Only POST it to the
-     // backend if the user actually flipped it — an unchanged box must not send
-     // rt_off and disable RT for everyone else on the shared backend.
-     const rt=$('#k_rt'); if(rt){ setRtOn(rt.checked); if(rt.checked!==state.rtOn) body.rt_off=!rt.checked; }
-     state.rtOn = rt ? rt.checked : state.rtOn;
+      // Persist the Rotten Tomatoes preference (this device) — per-person, local
+      // only. It is intentionally NOT posted to the backend: it applies only to you,
+      // via the rt_off param on each of your searches, so it never affects others.
+      const rt=$('#k_rt'); if(rt) setRtOn(rt.checked);
+      state.rtOn = rt ? rt.checked : state.rtOn;
      // persist the ticked subscriptions
      const ticked=[...subsGrid.querySelectorAll('input')].filter(i=>i.checked).map(i=>i.dataset.cid);
      setHousehold(ticked);

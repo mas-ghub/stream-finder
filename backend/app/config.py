@@ -20,7 +20,11 @@ class Settings(BaseSettings):
     # TVMaze — free, no key. Backbone for shows.
     tvmaze_enabled: bool = True
 
-    # Rotten Tomatoes enrichment — scraped, no key.
+    # Rotten Tomatoes enrichment — scraped, no key. This is the BACKEND global
+    # master switch (SF_RT_ENABLED in .env), ON by default. The per-person choice
+    # lives in the client (the "Rotten Tomatoes ratings" Settings toggle sends
+    # rt_off on each search) — flipping it there is strictly per-device and must
+    # NOT be persisted here, or one person's choice would change it for everyone.
     rt_enabled: bool = True
 
     # Optional: a free Serper.dev key makes RT show-URL resolution reliable.

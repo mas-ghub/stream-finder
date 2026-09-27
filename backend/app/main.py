@@ -948,11 +948,6 @@ async def set_keys(payload: dict):
     for k in ("tmdb_api_key", "tmdb_v4_token", "serper_api_key"):
         if k in payload:
             vals[k] = (payload[k] or "").strip()
-    # "rt_off" is the in-app Settings toggle (Rotten Tomatoes on/off). It's the one
-    # non-key setting the UI can change; we persist it and reflect it live so the very
-    # next search skips the scrape.
-    if "rt_off" in payload:
-        vals["rt_enabled"] = not bool(payload.get("rt_off"))
     lines = [
         f"SF_TMDB_API_KEY={vals['tmdb_api_key']}",
         f"SF_TMDB_V4_TOKEN={vals['tmdb_v4_token']}",
@@ -965,7 +960,6 @@ async def set_keys(payload: dict):
     settings.tmdb_api_key = vals.get("tmdb_api_key", "")
     settings.tmdb_v4_token = vals.get("tmdb_v4_token", "")
     settings.serper_api_key = vals.get("serper_api_key", "")
-    settings.rt_enabled = vals.get("rt_enabled", True)
     # Validate whichever TMDB key changed so the user gets real feedback.
     validation = {}
     if "tmdb_api_key" in payload and vals.get("tmdb_api_key"):
@@ -985,6 +979,7 @@ def _key_status() -> dict:
         "tmdb": {"set": bool(settings.tmdb_api_key), "masked": _mask(settings.tmdb_api_key)},
         "tmdb_v4": {"set": bool(settings.tmdb_v4_token), "masked": _mask(settings.tmdb_v4_token)},
         "serper": {"set": bool(settings.serper_api_key), "masked": _mask(settings.serper_api_key)},
+        "rt_enabled": bool(settings.rt_enabled),  # backend global master switch (per-person rt_off is separate)
     }
 
 
