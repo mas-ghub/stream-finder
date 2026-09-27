@@ -5,7 +5,16 @@ Last updated: the "Chrome local-network block → permission flow" session.
 
 ## FUTURE IDEA (user, not now): host without depending on the Mac staying on/awake/logged in (e.g. always-on hosting). Mac currently needs: plugged in, lid open, logged in. `sudo pmset -c sleep 0` applied (display sleep still 10 min).
 
-## v1.58 (current): PWA auto-updates when online + RT is per-person
+## v1.59 (current): one-time RT reset to off (fixes "still reading ratings" on updated apps)
+User: "pwa is now updating but it's still reading ratings." Root cause: an *earlier* build
+defaulted RT to **ON** and persisted `sf_rt=1`; the v1.57/v1.58 updates changed the *default*
+but the old saved value stuck. The backend is proven correct (with `rt_off` it skips the
+`ratings` phase entirely — verified live). Fix: a **one-time boot reset** — on launch, if
+`sf_rt==='1'`, set it to `'0'` (the new default) and re-read `state.rtOn`. No-op for anyone who
+already has it off. `APP_VERSION` → **1.59**; `sw.js` → `sf-shell-v31` (forces the installed app
+to pick this up). If it's *still* on after this, the RT toggle is in **Settings ⚙️**.
+
+## v1.58: PWA auto-updates when online + RT is per-person
 **PWA not refreshing:** user reported the installed app "does not refresh the version… it should
 automatically when online." Root cause: the service worker is network-first *design-wise*, but an
 **installed PWA that had cached an old `sw.js`** served the stale worker from cache and never

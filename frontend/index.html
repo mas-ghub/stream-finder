@@ -317,7 +317,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.58';
+const APP_VERSION = '1.59';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn() };
@@ -1211,6 +1211,11 @@ async function openSettings(){
 // boot — if the user has never set their subscriptions, pre-fill the common ones
 (async()=>{
   if(window.__headErr){ window.showErr(window.__headErr); return; }  // a parse/boot error already happened
+  // One-time reset: an earlier build defaulted Rotten Tomatoes to ON and saved that.
+  // Reset it to the new default (off) so nobody keeps seeing the slow "Reading
+  // ratings" step after the update. (No-op for people who already have it off.)
+  try{ if(localStorage.getItem('sf_rt')==='1'){ localStorage.setItem('sf_rt','0'); } }catch(e){}
+  state.rtOn = rtOn();  // re-read after the reset above
   state.limit = getLimit();
   if(!localStorage.getItem('sf_household')){
     setHousehold(['bbc','itvx','channel4','channel5','sky','apple','disney','paramount','hulu','netflix','prime']);
