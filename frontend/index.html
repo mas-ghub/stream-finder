@@ -317,10 +317,10 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.56';
+const APP_VERSION = '1.57';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
-let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false };
+let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn() };
 // Full result set from the last fetch. Sorts (incl. RT) happen locally against this —
 // a re-sort reshuffles what's loaded instead of refetching (the backend sorts the pool).
 let allResults = [];
@@ -399,6 +399,10 @@ function getHousehold(){
 }
 function setHousehold(list){ localStorage.setItem('sf_household', JSON.stringify(list)); }
 function getLimit(){ try{ const v=parseInt(localStorage.getItem('sf_max_results')); return v&&v>0?Math.min(v,1000):100; }catch(e){ return 100; } }
+// Rotten Tomatoes ratings: OFF by default — the backend spends a while scraping RT
+// per title (the "Reading ratings…" step), so we skip it unless the user turns it on.
+function rtOn(){ try{ return localStorage.getItem('sf_rt')==='1'; }catch(e){ return false; } }
+function setRtOn(on){ try{ localStorage.setItem('sf_rt', on?'1':'0'); }catch(e){} }
 function setLimit(v){ try{ localStorage.setItem('sf_max_results', String(Math.min(Math.max(1,v),1000))); }catch(e){} }
 
 // Map a provider onto a known channel id (mirror of backend channels.py).
@@ -513,6 +517,7 @@ async function doSearch(){
     getHousehold().forEach(c=>p.append('household', c));
   }
   if(state.englishOnly) p.set('english_only', 'true');
+  if(!state.rtOn) p.set('rt_off', 'true');  // skip the slow Rotten Tomatoes scrape step
   const hd=tmdbHeaders();
   // Live progress: give the backend an id; poll it while the search runs so the
   // UI can show "pulling N of M…" instead of an infinite spinner.
@@ -777,6 +782,7 @@ function render(spinner){
   if(state.streamOnly) shown = shown.filter(r => classify(r.platforms).status === 'free');
   if(state.freeOnly) shown = shown.filter(r => classify(r.platforms).noExtra);
   if(state.englishOnly) shown = shown.filter(r => (r.language||'').toLowerCase()==='en');
+  if(!state.rtOn) shown = shown.filter(r => { const rs=r.ratings||{}; return rs.rt_tomatometer==null && rs.rt_audience==null; });
   // Channel selection on the main screen: keep only titles on the picked services.
   const sel=new Set(myCh);
   if(sel.size) shown = shown.filter(r => { const have=new Set((r.platforms||[]).map(p=>p.channel)); for(const c of have){ if(sel.has(c)) return true; } return false; });
@@ -1094,11 +1100,19 @@ async function openSettings(){
            ${keys.tmdb_v4.set?`<p class="text-xs text-onmute mt-1">✓ Loaded from the Mac — used automatically.</p>`:`<p class="text-xs text-onmute mt-1">Recommended — powers <b>casts, trailers &amp; ratings</b>. To add it, edit <code>backend/.env</code> on the Mac.</p>`}
          </div>
          <div class="h-px bg-line"></div>
-         <div>
-           <div class="flex items-center justify-between mb-2"><label class="font-semibold">Serper.dev <span class="text-xs text-onmute">— optional, for TV ratings</span></label>
-             <span class="text-xs px-2 py-0.5 rounded-full" style="background:${keys.serper.set?'rgba(80,250,157,.15)':'var(--chip-bg)'};color:${keys.serper.set?'#50fa9d':'var(--c-onmute)'}">${keys.serper.set?'configured':'optional'}</span></div>
-           <input id="k_serper" value="" placeholder="optional — lets us resolve ratings for TV shows" class="w-full field border border-line rounded-xl px-3 py-2.5 text-sm"/>
-         </div>`}
+          <div>
+            <div class="flex items-center justify-between mb-2"><label class="font-semibold">Rotten Tomatoes ratings <span class="text-xs text-onmute">— 🍅 critic + 🍿 audience</span></label>
+              <span class="text-xs px-2 py-0.5 rounded-full" style="background:${state.rtOn?'rgba(80,250,157,.15)':'rgba(245,197,24,.15)'};color:${state.rtOn?'#50fa9d':'#ffd866'}">${state.rtOn?'on':'off'}</span></div>
+            <label class="flex items-center gap-2.5 text-sm cursor-pointer">
+              <input type="checkbox" id="k_rt" ${state.rtOn?'checked':''} class="accent-red-500 w-4 h-4"/>
+              <span>Show Rotten Tomatoes ratings</span>
+            </label>
+            <p class="text-xs text-onmute mt-1">Off (the default) skips the slow “Reading ratings…” scrape, so searches finish faster. Turn on for 🍅 tomato badges + RT sorts. (This applies to your device.)</p>
+            <div class="h-px bg-line my-4"></div>
+            <div class="flex items-center justify-between mb-2"><label class="font-semibold">Serper.dev <span class="text-xs text-onmute">— optional, makes TV ratings reliable</span></label>
+              <span class="text-xs px-2 py-0.5 rounded-full" style="background:${keys.serper.set?'rgba(80,250,157,.15)':'var(--chip-bg)'};color:${keys.serper.set?'#50fa9d':'var(--c-onmute)'}">${keys.serper.set?'configured':'optional'}</span></div>
+            <input id="k_serper" value="" placeholder="optional — without it, TV-show ratings often can't be found" class="w-full field border border-line rounded-xl px-3 py-2.5 text-sm"/>
+          </div>`}
         <div class="h-px bg-line"></div>
         <div>
           <div class="flex items-center justify-between mb-1"><label class="font-semibold">Your subscriptions</label><button id="subToggleAll" class="text-xs text-accent underline">All</button></div>
@@ -1154,19 +1168,30 @@ async function openSettings(){
      if(newTm) body.tmdb_api_key=newTm;
      if(newV4) body.tmdb_v4_token=newV4;
      if(newSe) body.serper_api_key=newSe;
-    // persist the ticked subscriptions
-    const ticked=[...subsGrid.querySelectorAll('input')].filter(i=>i.checked).map(i=>i.dataset.cid);
-    setHousehold(ticked);
-    const msg=$('#saveMsg'); msg.textContent='Saving…'; msg.className='text-xs text-white/60';
-    try{
+     // persist the Rotten Tomatoes preference (this device). Only POST it to the
+     // backend if the user actually flipped it — an unchanged box must not send
+     // rt_off and disable RT for everyone else on the shared backend.
+     const rt=$('#k_rt'); if(rt){ setRtOn(rt.checked); if(rt.checked!==state.rtOn) body.rt_off=!rt.checked; }
+     state.rtOn = rt ? rt.checked : state.rtOn;
+     // persist the ticked subscriptions
+     const ticked=[...subsGrid.querySelectorAll('input')].filter(i=>i.checked).map(i=>i.dataset.cid);
+     setHousehold(ticked);
+     const msg=$('#saveMsg');
+     const rtOnNow = rt ? rt.checked : state.rtOn;
+     // Nothing to persist (no new key, no flipped RT box) -> just save the subs locally.
+     const noBody = !Object.keys(body).length;
+     msg.textContent = (noBody && !rtOnNow) ? '✓ Saved — RT ratings off' : 'Saving…';
+     msg.className='text-xs ' + ((noBody && !rtOnNow) ? 'text-popcorn' : 'text-white/60');
+     try{
             const r=await (await fetch(API+'/api/keys',{method:'POST',headers:{'Content-Type':'application/json',...tmdbHeaders()},body:JSON.stringify(body)})).json();
        if(!r.ok){ msg.textContent='Could not save'; msg.className='text-xs text-red-300'; return; }
        if(bk&&bk.value) bk.value=localStorage.getItem('sf_backend')||'';  // reflect the stored backend
       const v=r.validation||{};
       let parts=[];
       if(v.api_key){ if(v.api_key.ok===false) parts.push(`<span class="text-red-300">API Key rejected (${v.api_key.message}).</span>`); else parts.push('API Key ✓'); }
-      if(v.v4_token){ if(v.v4_token.ok===false) parts.push(`<span class="text-red-300">Read Token rejected (${v.v4_token.message}).</span>`); else parts.push('Read Token ✓ (full details)'); }
-      if(!parts.length) parts.push(`${ticked.length} service${ticked.length===1?'':'s'}`);
+       if(v.v4_token){ if(v.v4_token.ok===false) parts.push(`<span class="text-red-300">Read Token rejected (${v.v4_token.message}).</span>`); else parts.push('Read Token ✓ (full details)'); }
+       if(rtOnNow && !keys.serper.set) parts.push(`<span class="text-amber-300">RT on — add a free Serper key below for reliable TV ratings</span>`);
+       if(!parts.length) parts.push(`${ticked.length} service${ticked.length===1?'':'s'}`);
       const anyBad=parts.some(x=>/rejected/i.test(x));
       msg.innerHTML='✓ Saved — '+parts.join(' · ');
       msg.className='text-xs '+(anyBad?'text-amber-300':'text-popcorn');

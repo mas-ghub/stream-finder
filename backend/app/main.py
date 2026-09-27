@@ -201,6 +201,7 @@ class Query(BaseModel):
     stream_only: bool = False
     free_only: bool = False
     english_only: bool = False
+    rt_off: bool = False  # client opted out of Rotten Tomatoes (skips the slow scrape)
     household: list[str] = Field(default_factory=list)
     fetch_all: bool = False
     pool: int | None = None
@@ -947,6 +948,11 @@ async def set_keys(payload: dict):
     for k in ("tmdb_api_key", "tmdb_v4_token", "serper_api_key"):
         if k in payload:
             vals[k] = (payload[k] or "").strip()
+    # "rt_off" is the in-app Settings toggle (Rotten Tomatoes on/off). It's the one
+    # non-key setting the UI can change; we persist it and reflect it live so the very
+    # next search skips the scrape.
+    if "rt_off" in payload:
+        vals["rt_enabled"] = not bool(payload.get("rt_off"))
     lines = [
         f"SF_TMDB_API_KEY={vals['tmdb_api_key']}",
         f"SF_TMDB_V4_TOKEN={vals['tmdb_v4_token']}",
@@ -959,6 +965,7 @@ async def set_keys(payload: dict):
     settings.tmdb_api_key = vals.get("tmdb_api_key", "")
     settings.tmdb_v4_token = vals.get("tmdb_v4_token", "")
     settings.serper_api_key = vals.get("serper_api_key", "")
+    settings.rt_enabled = vals.get("rt_enabled", True)
     # Validate whichever TMDB key changed so the user gets real feedback.
     validation = {}
     if "tmdb_api_key" in payload and vals.get("tmdb_api_key"):
@@ -1077,6 +1084,7 @@ async def search(
     stream_only: bool = False,
     free_only: bool = False,
     english_only: bool = False,
+    rt_off: bool = False,
     household: list[str] = FQuery(default=[]),
     fetch_all: bool = False,
     pool: int | None = None,
@@ -1092,8 +1100,15 @@ async def search(
     q = Query(q=q, kind=kind, genres=genres, mood=mood, year_min=year_min,
               year_max=year_max, min_rating=min_rating, min_rt=min_rt,
               channels=channels, where=where, stream_only=stream_only,
-              free_only=free_only, english_only=english_only, household=household,
-              fetch_all=fetch_all, pool=pool, sort=sort, limit=limit)
+              free_only=free_only, english_only=english_only, rt_off=rt_off,
+              household=household, fetch_all=fetch_all, pool=pool, sort=sort, limit=limit)
+    # Client opted out of Rotten Tomatoes (or it's disabled): skip the scrape step.
+    # rt_off also makes the RT/min-RT *filters* no-ops — with RT off there's nothing
+    # to filter or sort by, so a title without a score isn't wrongly dropped.
+    if q.rt_off:
+        q.min_rt = None
+        if q.sort in ("rt_critic", "rt_audience"):
+            q.sort = "relevance"
     tmdb_on = settings.tmdb_enabled and bool(tmdb_key())
     pid = progress_id  # key for the live progress the frontend polls
     if pid:
@@ -1194,7 +1209,7 @@ async def search(
         # pool first (capped at 200 for speed; the cache makes re-sorts free), then
         # every filter (incl. the channel filter) runs against the fresh values.
         pool = results
-        if settings.rt_enabled and (q.min_rt or rt_sort):
+        if settings.rt_enabled and not q.rt_off and (q.min_rt or rt_sort):
             if pid:
                 _progress(pid, phase="ratings", done=0, total=min(len(pool), 200))
             await _gather_bounded([_attach_rt(r) for r in pool[:200] if r.title], 10,
@@ -1207,8 +1222,9 @@ async def search(
     # RT for EVERY title that survived (no cap), so the client can sort/filter by
     # RT locally and the result set is identical no matter the pool order or which
     # device made the request. A ~200-title service browse is a few seconds; the
-    # provider/rating cache makes repeat queries free.
-    if settings.rt_enabled:
+    # provider/rating cache makes repeat queries free. Skipped entirely when the
+    # client turned Rotten Tomatoes off (rt_off) — that's the slow step.
+    if settings.rt_enabled and not q.rt_off:
         if pid:
             _progress(pid, phase="ratings", done=0, total=len(pool))
         await _gather_bounded([_attach_rt(r) for r in pool if r.title], 10,
