@@ -980,6 +980,7 @@ def _key_status() -> dict:
         "tmdb_v4": {"set": bool(settings.tmdb_v4_token), "masked": _mask(settings.tmdb_v4_token)},
         "serper": {"set": bool(settings.serper_api_key), "masked": _mask(settings.serper_api_key)},
         "rt_enabled": bool(settings.rt_enabled),  # backend global master switch (per-person rt_off is separate)
+        "max_results": int(settings.max_results),  # ops: the "All" browse ceiling (SF_MAX_RESULTS)
     }
 
 
