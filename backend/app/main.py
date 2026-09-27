@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from .channels import UK_ONLY, all_channels, channel_for, channel_meta
+from .channels import UK_ONLY, all_channels, channel_for, channel_family, channel_meta
 from .config import settings
 from .genres import MOODS, genres_for_mood, normalize_genre, normalize_genres
 from .models import Ratings, Result
@@ -880,8 +880,12 @@ def _apply_filters(results: list[Result], q: Query) -> list[Result]:
             if not all(w in hay for w in qwords):
                 continue
         if q.channels:
-            have = {p.get("channel") for p in (r.platforms or []) if p.get("channel")}
-            if not have & set(q.channels):
+            # Compare by brand family so "Sky" also matches Sky Cinema / Showcase
+            # (the sub-brands carry their own ids). A title matches if any of its
+            # provider channels folds into one of the picked families.
+            have = {channel_family(p.get("channel")) for p in (r.platforms or []) if p.get("channel")}
+            want = {channel_family(c) for c in q.channels}
+            if not have & want:
                 continue
         out.append(r)
     return out

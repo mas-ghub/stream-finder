@@ -317,7 +317,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.61';
+const APP_VERSION = '1.62';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn() };
@@ -408,9 +408,11 @@ function setLimit(v){ try{ localStorage.setItem('sf_max_results', String(v===0?0
 
 // Map a provider onto a known channel id (mirror of backend channels.py).
 const CH_ALIAS = {};
+// Sky sub-brands fold into "sky" so a Sky filter/picker matches Sky Cinema,
+// Sky Showcase and Sky Go too (the user has "Sky everything").
 const CH_BY_ID = {'netflix':'netflix','disney':'disney','disney+':'disney','star':'disney','national geographic':'disney',
   'apple tv':'apple','apple tv+':'apple','apple':'apple',
-  'sky':'sky','sky cinema':'sky_cinema','sky showcase':'sky_showcase','sky go':'sky_go','now tv cinema':'sky_cinema','now tv':'sky',
+  'sky':'sky','sky cinema':'sky','sky showcase':'sky','sky go':'sky','now tv cinema':'sky','now tv':'sky',
   'amazon prime':'prime','prime':'prime','prime video':'prime',
   'paramount+':'paramount','paramount':'paramount','hulu':'hulu','hulu uk':'hulu','max':'max','hbo max':'max',
   'hbo max amazon channel':'amazon','amazon channel':'amazon','starzplay amazon channel':'amazon',
@@ -424,6 +426,9 @@ function channelFor(p){
   for(const [needle,id] of map){ if(n.includes(needle)) return id; }
   return null;
 }
+// Fold a channel id up to its brand family (sky_cinema/sky_showcase/sky_go -> sky)
+// so a channel filter matches the whole brand, mirroring the backend.
+function channelFamily(c){ return (c==='sky_cinema'||c==='sky_showcase'||c==='sky_go')?'sky':(c==='prime_video'?'prime':c); }
 // Year dropdown options (2026 down to 1950), with an "any" sentinel.
 function yearOpts(val, label){
   const cur=parseInt(val)||0;
@@ -790,8 +795,9 @@ function render(spinner){
   // (RT is a badge/sort, not a filter — so there's no client-side RT filter. When RT
   // is off, searches simply return no tomato scores; the "🍅 rated" box is hidden.)
   // Channel selection on the main screen: keep only titles on the picked services.
-  const sel=new Set(myCh);
-  if(sel.size) shown = shown.filter(r => { const have=new Set((r.platforms||[]).map(p=>p.channel)); for(const c of have){ if(sel.has(c)) return true; } return false; });
+  // Compare by brand family so "Sky" also matches Sky Cinema / Showcase / Go.
+  const sel=new Set(myCh.map(channelFamily));
+  if(sel.size) shown = shown.filter(r => { const have=new Set((r.platforms||[]).map(p=>channelFamily(p.channel))); for(const c of have){ if(sel.has(c)) return true; } return false; });
   // Sort the FULL fetched set, then cap the display. (Sorting before the slice is
   // essential: e.g. "Year (newest)" must reorder all 300 so 2026 lands on top — the
   // oldest titles live past the page the backend sliced, so a pre-sorted first 100

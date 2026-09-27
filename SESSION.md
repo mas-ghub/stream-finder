@@ -5,7 +5,21 @@ Last updated: the "Chrome local-network block → permission flow" session.
 
 ## FUTURE IDEA (user, not now): host without depending on the Mac staying on/awake/logged in (e.g. always-on hosting). Mac currently needs: plugged in, lid open, logged in. `sudo pmset -c sleep 0` applied (display sleep still 10 min).
 
-## v1.60 (current): faster cold start (provider cap) + hide RT sorts when off + "All" size
+## v1.62 (current): Sky matches all its channels (Cinema / Showcase / Go)
+User: "click Sky → no info; others are fine; sky should look at all sky channels." Root cause:
+Sky's sub-brands carry their **own** channel ids (`sky_cinema`, `sky_showcase`, `sky_go`), so a
+"Sky" filter (id `sky`) only matched the core `sky` id and missed the sub-brands.
+- **Brand families** (`channels.py` `FAMILY`/`channel_family`): `sky_cinema`/`sky_showcase`/
+  `sky_go` → `sky` (and `prime_video` → `prime`). The channel filter now compares by family, so
+  "Sky" matches every Sky sub-brand. Frontend mirrors it (`channelFamily` + the render channel
+  filter + `CH_BY_ID` folds the sky names into `sky`).
+- Verified locally: a Sky browse went **0 → 38** (Sky Cinema 36 + Sky Go 21); Netflix unchanged.
+- `APP_VERSION` → **1.62**; `sw.js` → `sf-shell-v34`. Backend needs a **Render deploy**
+  (family filter is server-side); frontend auto-updates.
+
+## v1.61: round the detail popup corners (clip backdrop/body to the card, overflow-hidden)
+
+## v1.60: faster cold start (provider cap) + hide RT sorts when off + "All" size
 User: "checking where it streams took a while", and asked to (a) drop the RT sorts when RT is
 off, (b) add an **All** option to the max-results dropdown.
 - **Provider lookup capped to the page** (`main.py`): a service browse only needs provider

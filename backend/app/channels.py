@@ -201,6 +201,22 @@ def channel_meta(cid: str) -> dict:
     return CHANNELS.get(cid, {"name": cid.replace("_", " ").title(), "color": "#334155"})
 
 
+# A "brand family" groups a parent service with its sub-brands so that filtering by
+# the parent matches all of them. The user ticks "Sky" and expects Sky Cinema and
+# Sky Showcase too ("looking at all sky channels"), so every sky_* folds into "sky".
+FAMILY: dict[str, str] = {
+    "sky_cinema": "sky", "sky_showcase": "sky", "sky_go": "sky",
+    "prime_video": "prime",
+}
+
+
+def channel_family(cid: str | None) -> str | None:
+    """Fold a (possibly sub-brand) channel id up to its brand family, for filtering."""
+    if not cid:
+        return cid
+    return FAMILY.get(cid, cid)
+
+
 def all_channels() -> list[dict]:
     out = []
     for cid, meta in CHANNELS.items():
