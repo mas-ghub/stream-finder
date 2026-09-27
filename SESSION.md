@@ -1,7 +1,7 @@
 # Stream Finder — dev handover (SESSION)
 
 Working notes so we can pick up where we left off. Not user-facing (that's README.md).
-Last updated: the "Chrome local-network block → permission flow" session.
+Last updated: v1.64 — Sky channel browsing (family grouping, Sky Go → "Sky", scoped where-to-watch).
 
 ## FUTURE IDEA (user, not now): host without depending on the Mac staying on/awake/logged in (e.g. always-on hosting). Mac currently needs: plugged in, lid open, logged in. `sudo pmset -c sleep 0` applied (display sleep still 10 min).
 

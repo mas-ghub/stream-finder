@@ -9,10 +9,14 @@ Sitcom, Sci-Fi, Kids, Doc, Sport…), and you get films + series with:
   on a subscription *you actually have* (no surprise charges)
 - 🎚️ **"Only what I can stream"** filter + **⚙️ Settings → Your subscriptions**
   (tick what you have, add your own services anytime)
-- ⭐ ratings (Rotten Tomatoes Tomatometer + audience, TMDB vote)
+- ⭐ ratings (TMDB vote always; Rotten Tomatoes Tomatometer + audience is **off by
+  default** — turn it on in ⚙️ Settings, it adds a "reading ratings" step)
 - 🎬 **writeup** (synopsis), cast, director, runtime, year
 - ▶️ **trailer** (in the detail view)
-- filters: mood, genre, year range, minimum rating, sort
+- filters: mood, genre, year range, minimum rating, **English only**, sort
+- **Channel families** — pick **Sky** and it matches every Sky brand (Sky Cinema,
+  Sky Showcase, Sky Go); the "where to watch" list is scoped to the channel you picked
+- **Max results** — 25 / 50 / 100 / 200 / 500 / **All**
 
 > **Where to watch needs the TMDB key** (it's TMDB's free Watch Providers data,
 > region = UK). Shows the *subscriptions* first (e.g. "Dune → Max, Sky
@@ -45,9 +49,9 @@ Rotten Tomatoes, both free).
 
 | Route | Address | For |
 |---|---|---|
+| Anywhere (public) | `https://mas-ghub.github.io/stream-finder/` | any phone, anywhere — no setup, installs as a PWA |
 | On this Mac | `https://127.0.0.1:8443` | you, locally |
 | Family (home Wi‑Fi) | `https://192.168.0.59:8443` | anyone on the house Wi‑Fi |
-| Anywhere (public) | `https://marks-macbook-pro.tail0003aa.ts.net:10000` | any phone, anywhere — no Tailscale app, no setup |
 
 The old `./start.sh` (HTTP :8030) and `./start-https.sh` still work for manual runs,
 but `status.sh` + launchd is the normal way now.
@@ -67,39 +71,40 @@ key**). *(The amber bar at the top is the same shortcut.)*
 
 ## Use it from anywhere (public, no setup for the viewer)
 
-The app is published to the **public internet** via **Tailscale Funnel**, so a phone
-can open it from anywhere **without the Tailscale app** and without any account or
-passcode — same trick as the Assessment Portal's tunnel (that tunnel lives in
-`~/AssessmentPortal` and is a separate app; leave its `mac/tunnel-*.sh` files alone).
+The app is published to the **public internet** as a web app, so a phone can open it
+from anywhere **without any app install, account or passcode**:
 
-Share **`https://marks-macbook-pro.tail0003aa.ts.net:10000`** — it just works.
+- **Frontend** (the UI): **GitHub Pages** → `https://mas-ghub.github.io/stream-finder/`
+  (auto-deploys on every push). It installs as a **PWA** (Add to Home Screen) and
+  updates itself when online.
+- **Backend**: **Render** (free tier) → `https://stream-finder-api.onrender.com`
+  (the shared cloud backend). The app talks to it first, then falls back to the family
+  Mac (home Wi‑Fi) if the cloud is unreachable.
 
-**One-time setup (already done):** Tailscale Funnel public port **10000** → the local
-`:4443` server (`tailscale funnel --bg --https=10000 https+insecure://127.0.0.1:4443`).
-Port 443 is left free for the Assessment Portal's tunnel (Funnel only allows 443/8443/10000); everything runs via launchd. If the public URL ever stops
-working, check on the Mac: `./status.sh` (servers) and that the Tailscale app is
-connected.
+Share **`https://mas-ghub.github.io/stream-finder/`** — it just works. (The old
+Tailscale Funnel address `…tail0003aa.ts.net:10000` is retired for this app.)
 
-**Honest trade-off:** the address is internet-reachable. It's a read-only what-to-watch
-app (no accounts, no personal data), but anyone with the URL can browse it and can use
-the Settings page to *replace* the TMDB key with a bad one (it resets on the next
-server restart, and the real keys live in `backend/.env`). Keep the URL for people you
-trust. The Mac must be on (screen may sleep) for it to answer.
+**Honest trade-off:** it's a shared public backend. It's a read-only what-to-watch app
+(no accounts, no personal data), but anyone with the URL can use the Settings page to
+*replace* the shared TMDB key with a bad one (it resets on the next Render deploy, and
+the real keys live in Render's Environment settings, never in this repo). Keep the URL
+for people you trust.
 
-## Cloud backend (works even when the Mac is off)
+## Cloud backend (Render)
 
-A copy of the backend runs on **Render** (free tier) so the app works from anywhere
-*without* the Mac. The frontend (GitHub Pages: `https://mas-ghub.github.io/stream-finder/`)
-tries the Render backend first, then the family Mac (home Wi‑Fi), then the Tailscale
-address — the first that answers wins, and it's remembered on the device.
+The backend runs on **Render** (free tier) so the app works from anywhere *without*
+the Mac being on.
 
-- Repo: `mas-ghub/stream-finder` (this repo, `backend/` subdir) → Render web service
-  `stream-finder-api` → auto-deploys on every push (blueprint: `deploy/render/render.yaml`).
+- Repo: `mas-ghub/stream-finder` → Render web service **`stream-finder-api`**
+  (blueprint: `deploy/render/render.yaml`).
+- **Deploys:** the frontend (Pages) auto-deploys on every push. The backend (Render)
+  *usually* auto-deploys, but the free tier occasionally misses a push — if a backend
+  change doesn't appear, do a **Manual deploy** in `dashboard.render.com` →
+  `stream-finder-api` → Deploys → Manual deploy.
 - Render's free tier **sleeps after 15 minutes** of no traffic and takes ~1 minute to
-  wake — that's the only rough edge. (Hugging Face Spaces was the original plan, but
-  they now require a paid PRO plan to create a Docker Space.)
-- The TMDB keys live in Render's Environment settings (never in this repo — `.env` is
-  gitignored).
+  wake (the "waking up the server" screen covers that).
+- The TMDB keys live in Render's Environment settings (never in this repo — `backend/.env`
+  is gitignored).
 
 ## Optional: better TV ratings
 
