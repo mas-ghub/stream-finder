@@ -5,7 +5,21 @@ Last updated: the "Chrome local-network block → permission flow" session.
 
 ## FUTURE IDEA (user, not now): host without depending on the Mac staying on/awake/logged in (e.g. always-on hosting). Mac currently needs: plugged in, lid open, logged in. `sudo pmset -c sleep 0` applied (display sleep still 10 min).
 
-## v1.63 (current): card "+N services" respects the channel filter
+## v1.64 (current): "Where to watch" scoped to the channel + Sky Go relabelled "Sky"
+Two user fixes for the Sky browse:
+- **Sky Go → "Sky".** 139 (Sky Go) is a mobile *app*, not a channel. Relabelled "Sky" across
+  the board: backend `PROVIDER_ID_NAMES[139]`→"Sky", `PROVIDER_NAMES['sky go']`→"Sky",
+  `channels.channel_for(139)`→`sky`, `CHANNELS['sky_go'].name`→"Sky"; frontend `PROV_COLOR`
+  drops the separate 'Sky Go' entry + `CH_BY_ID` maps it to sky.
+- **Detail "Where to watch" scoped to the channel.** When a channel is selected, the popup's
+  service list now shows only that channel (family-folded), so a Sky browse shows Sky / Sky
+  Cinema — not the Netflix/Prime/Max the title is also on. New shared `watchRow()` helper used
+  by both the initial render and the enrich refresh. Verified in isolation: Dark Knight + Sky
+  lens → ['Sky Cinema']; + Netflix → ['Netflix']; no filter → all.
+- Frontend scoping auto-deploys; the Sky Go relabel is backend + frontend. `APP_VERSION` →
+  **1.64**; `sw.js` → `sf-shell-v36`. Backend needs a **Render deploy** for the relabel.
+
+## v1.63: card "+N services" respects the channel filter
 User: "click only Sky → why do I get Prime/Netflix/other? I should get Sky movies, Sky
 Cinema, Sky Max, Sky Atlantic…" The *results* were already Sky-only (v1.62); what looked wrong
 was each card's **"+N other services"** button (and the "✓ Stream Netflix" badge), which listed

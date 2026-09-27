@@ -317,7 +317,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.63';
+const APP_VERSION = '1.64';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn() };
@@ -412,7 +412,7 @@ const CH_ALIAS = {};
 // Sky Showcase and Sky Go too (the user has "Sky everything").
 const CH_BY_ID = {'netflix':'netflix','disney':'disney','disney+':'disney','star':'disney','national geographic':'disney',
   'apple tv':'apple','apple tv+':'apple','apple':'apple',
-  'sky':'sky','sky cinema':'sky','sky showcase':'sky','sky go':'sky','now tv cinema':'sky','now tv':'sky',
+  'sky':'sky','sky cinema':'sky','sky showcase':'sky','sky go':'sky','now tv cinema':'sky','now tv':'sky','sky go app':'sky',
   'amazon prime':'prime','prime':'prime','prime video':'prime',
   'paramount+':'paramount','paramount':'paramount','hulu':'hulu','hulu uk':'hulu','max':'max','hbo max':'max',
   'hbo max amazon channel':'amazon','amazon channel':'amazon','starzplay amazon channel':'amazon',
@@ -694,7 +694,7 @@ function sortResults(list, sort){
   return out.map(p=>p[1]);
 }
 
-const PROV_COLOR = {'Netflix':'#E50914','Disney+':'#113CCF','Apple TV':'#5E5CE6','Sky':'#1E3A8A','Sky Cinema':'#1E3A8A','Sky Go':'#1E3A8A','BBC iPlayer':'#A31BBB','ITVX':'#1E3A8A','Channel 4':'#0E7490','Channel 5':'#FF5C00','Prime Video':'#00A8E1','Paramount+':'#17083C','Hulu':'#1CE783','Shudder':'#334155','MUBI':'#334155','BritBox':'#1D4ED8','Acorn TV':'#1D3C5F','Crunchyroll':'#F47521','Pluto TV':'#6D28D9','Tubi':'#FF6A00','Free TV':'#3B82F6','Max':'#2563EB','Max (via Amazon)':'#4B5563','Amazon Channel':'#4B5563'};
+const PROV_COLOR = {'Netflix':'#E50914','Disney+':'#113CCF','Apple TV':'#5E5CE6','Sky':'#1E3A8A','Sky Cinema':'#1E3A8A','BBC iPlayer':'#A31BBB','ITVX':'#1E3A8A','Channel 4':'#0E7490','Channel 5':'#FF5C00','Prime Video':'#00A8E1','Paramount+':'#17083C','Hulu':'#1CE783','Shudder':'#334155','MUBI':'#334155','BritBox':'#1D4ED8','Acorn TV':'#1D3C5F','Crunchyroll':'#F47521','Pluto TV':'#6D28D9','Tubi':'#FF6A00','Free TV':'#3B82F6','Max':'#2563EB','Max (via Amazon)':'#4B5563','Amazon Channel':'#4B5563'};
 const SVC_LABEL = {flatrate:'In', rent:'Rent', buy:'Buy', free:'Free'};
 function provChip(p){
   const c = PROV_COLOR[p.provider] || '#334155';
@@ -743,6 +743,21 @@ function subsBadges(r){
     return `<span class="text-[11px] px-2 py-1 rounded-md font-bold leading-tight" style="background:${col};color:#fff;border:2px solid #22c55e;box-shadow:0 1px 3px rgba(0,0,0,.45)" title="${esc(top.nm)} — you have this">✓ ${esc(top.nm)}</span>`; })() : '';
   const more = extra>0 ? `<button data-subs data-t="${esc(r.title)}" data-k="${esc(r.kind)}" class="text-[11px] px-2 py-1 rounded-md font-bold leading-tight" style="background:#1e293b;color:#fff;border:2px solid rgba(255,255,255,.6)">${top?'+'+extra:extra+' other service'+(extra>1?'s':'')}</button>` : '';
   return `<div class="flex flex-wrap items-center gap-1 mt-1">${one}${more}</div>`;
+}
+// "Where to watch" chips for the detail popup. Scoped to the active channel lens (family-
+// folded) so a Sky browse shows Sky / Sky Cinema — not the Netflix/Prime/Max the title also
+// happens to be on. With no filter, shows everything as before.
+function watchRow(providers){
+  const active=new Set(lensChannels().map(channelFamily));
+  let list=(providers||[]);
+  if(active.size) list=list.filter(p=>{ const c=channelFor(p); return c && active.has(channelFamily(c)); });
+  if(!list.length){
+    if(active.size) return `<span class="text-onmute text-sm">On your selected service${active.size>1?'s':''} only — no other in-scope services for this title.</span>`;
+    return `<span class="text-onmute text-sm">Not listed on any UK streaming service we track. It may still be rentable/buyable, or only on a service we don't list.</span>`;
+  }
+  const seen=new Set();
+  const chips=list.filter(p=>{ const nm=p.channel_name||p.provider; if(seen.has(nm)) return false; seen.add(nm); return true; });
+  return `<div class="flex flex-wrap gap-1.5">${chips.map(p=>{const nm=p.channel_name||p.provider;const c=PROV_COLOR[nm]||'#334155';const t=SVC_LABEL[p.type];return `<span class="text-xs px-2.5 py-1 rounded-lg font-semibold" style="background:${c};color:#fff">${esc(nm)}${t?`<span class="opacity-70 font-normal"> · ${t}</span>`:''}</span>`;}).join('')}</div>`;
 }
 let _langNames=null;
 function langName(code){
@@ -1011,7 +1026,7 @@ function openDetail(title, kind){
         </div>
         <div class="mt-3 flex flex-wrap gap-2">${ratingBadges(r)||''}</div>
         <div class="mt-5 text-onfg leading-relaxed" style="opacity:.9">${esc(r.overview)||'<span class="text-onmute">No synopsis.</span>'}</div>
-        <div class="mt-5"><div class="text-xs uppercase tracking-widest text-onmute mb-2">Where to watch <span class="normal-case tracking-normal opacity-70">(UK)</span></div><div id="watchRow" class="flex flex-wrap gap-1.5">${(r.platforms&&r.platforms.length)?`<div class="flex flex-wrap gap-1.5">${[...new Set(r.platforms.map(p=>p.provider))].map(p=>{const pr=r.platforms.find(x=>x.provider===p);const c=PROV_COLOR[p]||'#334155';const t=SVC_LABEL[pr.type];return `<span class="text-xs px-2.5 py-1 rounded-lg font-semibold" style="background:${c};color:#fff">${esc(p)}${t?`<span class="opacity-70 font-normal"> · ${t}</span>`:''}</span>`;}).join('')}</div>`:'<span class="text-onmute text-sm">Checking availability…</span>'}</div></div>
+        <div class="mt-5"><div class="text-xs uppercase tracking-widest text-onmute mb-2">Where to watch <span class="normal-case tracking-normal opacity-70">(UK)</span></div><div id="watchRow" class="flex flex-wrap gap-1.5">${(r.platforms&&r.platforms.length)?watchRow(r.platforms):'<span class="text-onmute text-sm">Checking availability…</span>'}</div></div>
         ${(r.cast&&r.cast.length)?`<div class="mt-5"><div class="text-xs uppercase tracking-widest text-onmute mb-2">Cast <span class="normal-case tracking-normal opacity-70">— tap a name for their films</span></div><div class="flex flex-wrap gap-2" id="castRow">${(r.cast_full||[]).slice(0,10).map((c,i)=>`<button data-pid="${c.person_id||''}" data-name="${esc(c.name)}" class="chip px-3 py-1 rounded-full text-sm cursor-pointer hoverable">${esc(c.name)}</button>`).join('')||(r.cast.slice(0,10).map(c=>`<span class="chip px-3 py-1 rounded-full text-sm">${esc(c)}</span>`).join(''))}</div></div>`:''}
         ${r.trailer_url?`<div class="mt-6"><div class="text-xs uppercase tracking-widest text-onmute mb-2">Trailer</div><div class="aspect-video rounded-xl overflow-hidden border border-line"><iframe class="w-full h-full" src="${esc(r.trailer_url)}?autoplay=1&rel=0" allow="autoplay; encrypted-media" allowfullscreen></iframe></div></div>`:''}
         ${r.external_url?`<div class="mt-6"><a href="${esc(r.external_url)}" target="_blank" rel="noopener" class="inline-flex items-center gap-2 field hoverable border border-line px-4 py-2.5 rounded-xl text-sm">Open full details ↗</a></div>`:''}
@@ -1029,9 +1044,7 @@ function openDetail(title, kind){
     // where to watch
     const wr = db.querySelector('#watchRow');
     if(wr){
-      const provs=[...new Set((fr.platforms||[]).map(p=>p.provider))];
-      wr.innerHTML = provs.length ? provs.map(p=>{const pr=(fr.platforms||[]).find(x=>x.provider===p);const c=PROV_COLOR[p]||'#334155';const t=SVC_LABEL[pr.type];return `<span class="text-xs px-2.5 py-1 rounded-lg font-semibold" style="background:${c};color:#fff">${esc(p)}${t?`<span class="opacity-70 font-normal"> · ${t}</span>`:''}</span>`;}).join('')
-        : `<span class="text-onmute text-sm">Not listed on any UK streaming service we track (Netflix, Disney+, Apple TV, Sky, Prime, BBC, ITVX, Channel 4, Channel 5, BritBox, Max, Paramount+). It may still be available to rent/buy, or only on a service we don't list.</span>`;
+      wr.innerHTML = watchRow(fr.platforms||[]);
     }
     // Trailer: replace the existing placeholder's src if present, otherwise add a new
     // block. (Replacing fixes the "no video" case where the card had a placeholder but

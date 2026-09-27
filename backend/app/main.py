@@ -567,7 +567,9 @@ PROVIDER_NAMES = {
     "netflix": "Netflix", "disneyplus": "Disney+", "disney": "Disney+",
     "appletvplus": "Apple TV", "apple_tv": "Apple TV", "apple": "Apple TV",
     "sky": "Sky", "sky cinema": "Sky Cinema", "sky cinema collection": "Sky Cinema",
-    "sky showcase": "Sky Showcase", "sky go": "Sky Go", "sky now": "Sky",
+    # "sky go" is the mobile app for the main Sky channels — label it "Sky", not a
+    # separate service (it's just your Sky sub on a phone).
+    "sky showcase": "Sky Showcase", "sky go": "Sky", "sky now": "Sky",
     "bbc": "BBC iPlayer", "bbc iplayer": "BBC iPlayer", "itv": "ITVX",
     "itvx": "ITVX", "channel 4": "Channel 4", "channel 4 odesly": "Channel 4",
     "channel 5": "Channel 5", "channel 5 odesly": "Channel 5",
@@ -598,7 +600,9 @@ PROVIDER_ID_NAMES = {
     303: "Disney+", 304: "Disney+", 258: "Disney+",
     314: "Apple TV", 315: "Apple TV", 316: "Apple TV", 2: "Apple TV",
     136: "Sky Cinema", 137: "Sky Cinema", 138: "Sky", 130: "Sky Store",
-    139: "Sky Showcase", 140: "Sky", 141: "Sky", 142: "Sky",
+    # 139 (Sky Go) is the mobile *app* that streams the Sky main channels — show it as
+    # "Sky" (it's the on-the-go version of your Sky sub), not a separate "Sky Go".
+    139: "Sky", 140: "Sky", 141: "Sky", 142: "Sky",
     591: "Sky Cinema", 1899: "Max", 1825: "Max (via Amazon)", 1826: "Max (via Amazon)",
     38: "BBC iPlayer", 39: "BBC iPlayer", 528: "BBC iPlayer",
     60: "ITVX", 133: "ITVX", 134: "ITVX", 135: "ITVX",

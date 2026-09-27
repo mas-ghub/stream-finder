@@ -19,7 +19,9 @@ CHANNELS: dict[str, dict] = {
     # hidden from the picker (visible=False) to keep it uncluttered.
     "sky_cinema": {"name": "Sky Cinema", "color": "#0A1E5B", "visible": False},
     "sky_showcase": {"name": "Sky Showcase", "color": "#0A1E5B", "visible": False},
-    "sky_go": {"name": "Sky Go", "color": "#0A1E5B", "visible": False},
+    # Sky Go is the mobile app for the main Sky channels — label it "Sky" (hidden: it's
+    # not a channel you tick; it folds into the Sky sub).
+    "sky_go": {"name": "Sky", "color": "#0A1E5B", "visible": False},
     "prime": {"name": "Prime Video", "color": "#00A8E1"},
     "prime_video": {"name": "Prime Video", "color": "#00A8E1", "visible": False},
     "paramount": {"name": "Paramount+", "color": "#17083C"},
@@ -96,7 +98,8 @@ ID_TO_CHANNEL: dict[int, str] = {
     303: "disney", 304: "disney", 258: "disney", 88: "disney",
     314: "apple", 315: "apple", 316: "apple", 2: "apple",
     136: "sky_cinema", 137: "sky_cinema", 138: "sky", 130: "sky",
-    139: "sky_showcase", 140: "sky", 141: "sky", 142: "sky", 591: "sky_cinema",
+    # 139 (Sky Go) is the mobile app for the main Sky channels — treat as "sky".
+    139: "sky", 140: "sky", 141: "sky", 142: "sky", 591: "sky_cinema",
     10: "prime", 11: "prime", 21: "prime", 6: "prime",
     331: "paramount", 332: "paramount",
     38: "bbc", 39: "bbc", 528: "bbc",
