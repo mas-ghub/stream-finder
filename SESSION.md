@@ -5,7 +5,29 @@ Last updated: the "Chrome local-network block → permission flow" session.
 
 ## FUTURE IDEA (user, not now): host without depending on the Mac staying on/awake/logged in (e.g. always-on hosting). Mac currently needs: plugged in, lid open, logged in. `sudo pmset -c sleep 0` applied (display sleep still 10 min).
 
-## v1.59 (current): one-time RT reset to off (fixes "still reading ratings" on updated apps)
+## v1.60 (current): faster cold start (provider cap) + hide RT sorts when off + "All" size
+User: "checking where it streams took a while", and asked to (a) drop the RT sorts when RT is
+off, (b) add an **All** option to the max-results dropdown.
+- **Provider lookup capped to the page** (`main.py`): a service browse only needs provider
+  data for the titles that survive to the page, so it now checks the top `limit` of the
+  (service-pre-filtered, popularity-sorted) pool instead of the whole ~1000. A 50-browse does
+  ~50 TMDB `watch/providers` calls, not ~500 → big cold-start win (warm, cached 24h, is instant
+  either way). `limit 0` ("All") checks the full pool (low-hit-rate services have hits
+  scattered deep).
+- **`limit=0` = "All"** handled end-to-end: `doSearch` sends `limit=1000` (backend pool) and the
+  client shows the whole set; the display cap is `state.limit ? slice : all`. The final
+  slice is `ordered if limit<=0 else ordered[:limit]` (avoids the `[:0]`→1 bug). `getLimit`/
+  `setLimit` accept 0.
+- **RT sorts hidden when RT off** (frontend sort `<select>`): `rt_critic`/`rt_audience` only
+  appear when `state.rtOn` (they're meaningless with no scores). Backend also resets an RT sort
+  → relevance when `rt_off`.
+- **Max-results dropdown** now: 100 (default) · 25 · 50 · 200 · 500 · **All**.
+- `APP_VERSION` → **1.60**; `sw.js` → `sf-shell-v32`. `/api/keys` now also echoes `max_results`
+  (ops diagnostic — caught that Render was still on the pre-v1.60 build during rollout).
+- Deployed: Pages auto (v1.60); Render backend needed a **manual deploy** (free-tier auto-deploy
+  flaky) to pick up the provider cap + All. Verified live: Netflix All = full pool (87), x50 capped.
+
+## v1.59: one-time RT reset to off (fixes "still reading ratings" on updated apps)
 User: "pwa is now updating but it's still reading ratings." Root cause: an *earlier* build
 defaulted RT to **ON** and persisted `sf_rt=1`; the v1.57/v1.58 updates changed the *default*
 but the old saved value stuck. The backend is proven correct (with `rt_off` it skips the
