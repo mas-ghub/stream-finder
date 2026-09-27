@@ -5,7 +5,26 @@ Last updated: the "Chrome local-network block → permission flow" session.
 
 ## FUTURE IDEA (user, not now): host without depending on the Mac staying on/awake/logged in (e.g. always-on hosting). Mac currently needs: plugged in, lid open, logged in. `sudo pmset -c sleep 0` applied (display sleep still 10 min).
 
-## v1.56 (current): "English only" filter
+## v1.57 (current): Rotten Tomatoes OFF by default (the "Reading ratings" step)
+User: "when I watch it, reading ratings takes a long time — what is that? If it's RT we can
+skip it." Answer: it's the **Rotten Tomatoes scrape** (🍅 Tomatometer + 🍿 audience) — slow
+because Render has **no Serper key**, so each title's RT URL is a guessed slug that often 404s
+(12s timeout each), across the whole pool at 10-at-a-time.
+- **Now OFF by default.** `rt_off` (new `Query`/route param; frontend `state.rtOn` defaults
+  false, persisted per-device in `sf_rt`). When off: the backend skips BOTH RT-attach blocks,
+  and RT/min-RT *filters* + RT sorts become no-ops (so a title without a score isn't wrongly
+  dropped; an RT sort falls back to relevance). Verified live on Render: plain movie browse
+  **42s → 35s** and the `ratings` phase disappears (phase timeline `pulled` only).
+- **Settings:** "Rotten Tomatoes ratings" on/off switch (default off) above the Serper field.
+  Save persists it per-device; if the box was flipped it also POSTs `rt_off` so the shared
+  backend matches. **Note:** on the shared Render backend this currently makes RT off for
+  *everyone* (a per-user server setting can't be done cleanly) — acceptable since off is the
+  default; per-device state is authoritative for the UI. Warns "add a free Serper key for
+  reliable TV ratings" when RT is on without one.
+- `APP_VERSION` → **1.57**; `sw.js` → `sf-shell-v29`. Deployed (Mac restarted; Render set
+  RT-off via `POST /api/keys {rt_off:true}`; Pages + Render auto-deployed).
+
+## v1.56: "English only" filter
 User: "we're not using Tailscale for this app (it's Pages + Render) — and add a checkbox for
 English-language only." (The Tailscale `:10000` "ANYWHERE" route in status.sh/README is now
 vestigial for this app — the public path is the Pages site → Render backend. The 4443 funnel
