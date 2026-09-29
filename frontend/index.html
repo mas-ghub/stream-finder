@@ -54,8 +54,9 @@ tailwind.config = {
     --field-bg:rgba(15,23,42,.04); --chip-bg:rgba(15,23,42,.07); --chip-line:rgba(15,23,42,.16);
     --card-grad:#1b2436; --card-grad2:#0e1320; --scrollthumb:#cbd5e1; --hover:rgba(15,23,42,.05);
   }
-  html,body{height:100%;overscroll-behavior-y:none;}
-  html{background:var(--c-ink);}
+   html,body{height:100%;overscroll-behavior-y:none;}
+   html{background:var(--c-ink);}
+   body{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);}
   body{background:radial-gradient(1200px 600px at 15% -10%, var(--c-grad) 0%, var(--c-ink) 55%);color:var(--c-onfg);transition:background .3s ease,color .3s ease;}
   #app,#app>header,#app>section,#app>.mt-5{background:transparent;}
   #app{background-color:var(--c-ink);}
@@ -317,7 +318,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.64';
+const APP_VERSION = '1.65';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn() };
