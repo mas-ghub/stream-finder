@@ -94,6 +94,103 @@ def _prov_cached(key: tuple) -> list | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Persistent disk cache
+#
+# The in-memory caches above are wiped every time the (free-tier Render) container
+# is recycled after sleeping, so the first search after an idle period re-fetches
+# everything (providers + RT scrape + cast) and feels very slow. We mirror the
+# long-lived caches (providers, cast, RT) to a JSON file on disk and restore them
+# on boot, so a cold container starts with a WARM cache. Render gives each service
+# a local persistent disk; we write there, falling back to a temp dir if it's not
+# writable. Keys are tuples (not JSON-serialisable) so we join them with a unit
+# separator when persisting.
+# ---------------------------------------------------------------------------
+_PERSIST_PATH = os.environ.get(
+    "SF_CACHE_FILE",
+    os.path.join(os.environ.get("SF_CACHE_DIR", "/tmp"), "sf_cache.json"),
+)
+_PERSIST_TTL = {  # how long a restored entry stays valid (seconds)
+    "prov": _PROV_TTL,
+    "cast": _CAST_TTL,
+    "rt": settings.cache_ttl,
+}
+_persist_loaded = False
+
+
+def _key_str(key: tuple) -> str:
+    return "\x1f".join(str(p) for p in key)
+
+
+def _key_tup(s: str) -> tuple:
+    # Reconstruct the original components. JSON round-trips ints as strings, so turn
+    # anything that is purely digits back into an int — the prov/cast/rt caches all
+    # key on tmdb_id (an int), so without this a restored entry would never match.
+    out = []
+    for p in s.split("\x1f"):
+        out.append(int(p) if p.isdigit() else p)
+    return tuple(out)
+
+
+def _persist_save() -> None:
+    """Snapshot the long-lived caches to disk (best-effort, never fatal)."""
+    try:
+        now = time.time()
+        blob = {
+            "prov": {_key_str(k): [ts, v] for k, (ts, v) in _PROV_CACHE.items()
+                     if v is not None and now - ts < _PROV_TTL},
+            "cast": {_key_str(k): [ts, v] for k, (ts, v) in _CAST_CACHE.items()
+                     if now - ts < _CAST_TTL},
+            "rt": {_key_str(k): e for k, e in _RT_CACHE.items()
+                   if e.get("_t", 0) > now and e.get("_t", 0) - now < _PERSIST_TTL["rt"]},
+        }
+        with open(_PERSIST_PATH, "w") as f:
+            json.dump(blob, f)
+    except Exception as e:  # noqa: BLE001
+        log.debug("cache persist failed: %s", e)
+
+
+def _persist_load() -> None:
+    """Restore the long-lived caches from disk on boot (best-effort)."""
+    global _persist_loaded
+    _persist_loaded = True
+    if not os.path.exists(_PERSIST_PATH):
+        return
+    try:
+        with open(_PERSIST_PATH) as f:
+            blob = json.load(f)
+    except Exception as e:  # noqa: BLE001
+        log.debug("cache load failed: %s", e)
+        return
+    now = time.time()
+    for ks, v in (blob.get("prov") or {}).items():
+        if isinstance(v, list) and len(v) == 2 and now - v[0] < _PROV_TTL:
+            _PROV_CACHE[_key_tup(ks)] = (v[0], v[1])
+    for ks, v in (blob.get("cast") or {}).items():
+        if isinstance(v, list) and len(v) == 2 and now - v[0] < _CAST_TTL:
+            _CAST_CACHE[_key_tup(ks)] = (v[0], v[1])
+    for ks, e in (blob.get("rt") or {}).items():
+        if isinstance(e, dict) and e.get("_t", 0) > now:
+            _RT_CACHE[_key_tup(ks)] = e
+    n = len(_PROV_CACHE) + len(_CAST_CACHE) + len(_RT_CACHE)
+    if n:
+        log.info("restored %d cached entries from %s", n, _PERSIST_PATH)
+
+
+# Load the persisted cache as early as possible so the first search after a cold
+# start hits it. Done at import time (module load) which is before any request.
+_persist_load()
+
+
+def _mark_cache_dirty() -> None:
+    """Call after mutating a persisted cache; debounced save via a background task."""
+    try:
+        t = asyncio.get_event_loop()
+    except RuntimeError:
+        return
+    t.call_later(2.0, _persist_save)  # batch writes: save 2s after the last change
+
+
 # Per-request TMDB key override (the frontend can pass a key stored in
 # localStorage so the user never has to edit .env).
 # v4 (Read Access Token) auth style: "bearer" | "param" | None (undecided).
@@ -207,6 +304,7 @@ class Query(BaseModel):
     pool: int | None = None
     sort: str = "relevance"
     limit: int = 60
+    offset: int = 0  # "load more" pagination: start of the next batch
 
 
 class SourceStatus(BaseModel):
@@ -448,6 +546,8 @@ async def _rt_lookup(title: str, year: int | None, kind: str = "movie") -> dict:
     except Exception as e:  # noqa: BLE001
         log.debug("rt lookup failed for %s: %s", title, e)
     _RT_CACHE[key] = {**data, "_t": time.time() + (settings.cache_ttl if data else _RT_MISS_TTL)}
+    if data:  # only persist real results, not the brief miss entries
+        _mark_cache_dirty()
     return data
 
 
@@ -716,6 +816,7 @@ async def _providers(r: "Result") -> list[dict]:
     res.sort(key=lambda x: (SERVICE_ORDER.get(x["type"], 9), x["provider"]))
     res = res[:24]
     _PROV_CACHE[ckey] = (time.time(), res)
+    _mark_cache_dirty()
     return res
 
 
@@ -849,6 +950,7 @@ async def _enrich_tmdb(tmdb_id: int, kind: str, for_cast: bool = False) -> dict:
         data = {}
     if for_cast:
         _CAST_CACHE[(kind, tmdb_id)] = (time.time(), data)
+        _mark_cache_dirty()
     return data
 
 
@@ -1094,6 +1196,7 @@ async def search(
     pool: int | None = None,
     sort: str = "relevance",
     limit: int = 60,
+    offset: int = 0,
     progress_id: str | None = None,
 ):
     # Be lenient: the frontend may URL-encode a genre with a space oddly,
@@ -1105,7 +1208,8 @@ async def search(
               year_max=year_max, min_rating=min_rating, min_rt=min_rt,
               channels=channels, where=where, stream_only=stream_only,
               free_only=free_only, english_only=english_only, rt_off=rt_off,
-              household=household, fetch_all=fetch_all, pool=pool, sort=sort, limit=limit)
+              household=household, fetch_all=fetch_all, pool=pool, sort=sort,
+              limit=limit, offset=max(0, offset))
     # Client opted out of Rotten Tomatoes (or it's disabled): skip the scrape step.
     # rt_off also makes the RT/min-RT *filters* no-ops — with RT off there's nothing
     # to filter or sort by, so a title without a score isn't wrongly dropped.
@@ -1196,10 +1300,16 @@ async def search(
     # client shows all of it. For provider/rating lookups we cap separately below.
     limit = max(0, q.limit) if q.limit else 0
     limit = min(limit, settings.max_results)
+    offset = max(0, q.offset)
+    # When the client is paging with "load more" (offset>0), it asks for its full
+    # display pool (limit) and we serve a slice of it. Keep that whole pool ranked
+    # (don't truncate here) so every offset is consistent — the expensive provider
+    # lookup is still capped to the top `limit` below, so cost stays bounded.
+    paging = offset > 0
     # RT / min-rating sorts need ratings to be meaningful, so keep the wider pool
     # for those; every other path is pre-capped to the page.
     rt_sort = q.sort in ("rt_critic", "rt_audience")
-    if limit > 0 and not (q.channels or rt_sort):
+    if limit > 0 and not (q.channels or rt_sort or paging):
         results = _sort(results, q)[:limit]
 
     # Channel filter needs provider data, so attach it (in parallel) BEFORE the
@@ -1247,7 +1357,13 @@ async def search(
                               progress_key=pid, progress_phase="ratings", progress_total=len(pool))
     ordered = _sort(pool, q)
     # limit 0 = "All": return the whole (filtered) pool; otherwise the top `limit`.
-    filtered = ordered if limit <= 0 else ordered[:limit]
+    display_pool = ordered if limit <= 0 else ordered[:limit]
+    # Total the client *can* page through (the display pool size) — used to decide
+    # whether a "load more" button should show. The returned `count` is the size of
+    # THIS batch; the client tracks how many it has loaded and compares to `total`.
+    total = len(display_pool)
+    # Apply the "load more" offset: serve the next batch of the display pool.
+    filtered = display_pool[offset:offset + limit] if (paging and limit > 0) else display_pool
     if pid:
         _progress(pid, phase="finishing", done=0, total=len(filtered))
     # Enrich only the page the user sees (RT was just attached to the whole pool).

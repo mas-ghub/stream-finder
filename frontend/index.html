@@ -335,10 +335,13 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.78';
+const APP_VERSION = '1.79';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
-let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn() };
+let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0 };
+// "Load more" reveals more of the already-fetched pool in batches (instant, local)
+// before it asks the backend for the next offset slice. 40 = a fast first paint.
+const LOAD_MORE_STEP = 40;
 // Full result set from the last fetch. Sorts (incl. RT) happen locally against this —
 // a re-sort reshuffles what's loaded instead of refetching (the backend sorts the pool).
 let allResults = [];
@@ -509,6 +512,8 @@ async function doSearch(){
   const mySeq = ++searchSeq;
   if(searchCtl) try{ searchCtl.abort(); }catch(e){}
   searchCtl = window.AbortController ? new AbortController() : null;
+  // Fresh search → start from a small first page; "Load more" grows it from here.
+  state.loaded = Math.min(state.limit || 40, 40);
   busy = true; render(true);
   // The "My services" lens: browse the pool of everything on the services you
   // have (all of them by default). A text search or a mood turns the lens off.
@@ -841,10 +846,20 @@ function render(spinner){
   // oldest titles live past the page the backend sliced, so a pre-sorted first 100
   // would never surface them.) "Max results" then caps only the display; re-sorts
   // are instant local reshuffles of the stored set (no refetch).
-  const sorted = sortResults(shown, state.sort);
-  // limit 0 = "All": show everything the backend returned (no display cap).
-  shown = state.limit ? sorted.slice(0, state.limit) : sorted;
-  const app=$('#app');
+   const sorted = sortResults(shown, state.sort);
+   // The pool we can page through: the full ranked/filtered set, capped to the
+   // "Max results" setting (0 = All → no cap). This is the "total" for Load-more.
+   const poolCap = state.limit || Infinity;
+   const pool = sorted.length > poolCap ? sorted.slice(0, poolCap) : sorted;
+   state.poolTotal = pool.length;
+   // How many to actually render right now. state.loaded is a running display count
+   // ("load more" grows it in LOAD_MORE_STEP batches); it never exceeds the pool.
+   const nShown = Math.min(state.loaded, pool.length);
+   shown = pool.slice(0, nShown);
+   // There's more to reveal when the pool has unshown items AND (if a Max-results cap
+   // is set) we haven't already reached it. Drives the "Load more" button below.
+   const hasMore = pool.length > nShown;
+   const app=$('#app');
   // The whole screen is rebuilt on every render; keep the search box focused (and the
   // caret) if the user is in it, otherwise the keyboard closes mid-typing / when results land.
   const _ae=document.activeElement, _qFocus=!!(_ae && _ae.id==='q'), _qS=_qFocus?_ae.selectionStart:0, _qE=_qFocus?_ae.selectionEnd:0;
@@ -944,9 +959,12 @@ function render(spinner){
           ${state.streamOnly?'Nothing you can stream with your current subscriptions. Turn off <b class="text-onsub">I can stream</b> to see everything.':
             (state.englishOnly?'Nothing in English matches those filters. Turn off <b class="text-onsub">English only</b> to include foreign-language titles.':
             (state.freeOnly?'Nothing you can watch for nothing extra matches those filters. Free = included in a service you have, or on a free service (not rent/buy). Turn off <b class="text-onsub">Free only</b> to see everything.':
-             (channelActive()?`Nothing on <b class="text-onsub">${channelActive()} service${channelActive()>1?'s':''}</b> matches those filters right now. Try fewer moods, a different year, or a different service.`:
-             'No matches with those filters. Try a different mood, year range, or search a specific title.')))}</div>`)}
-  </div>`;
+              (channelActive()?`Nothing on <b class="text-onsub">${channelActive()} service${channelActive()>1?'s':''}</b> matches those filters right now. Try fewer moods, a different year, or a different service.`:
+              'No matches with those filters. Try a different mood, year range, or search a specific title.')))}</div>`)}
+   </div>
+   ${(!spinner && subs.length && hasMore) ? `<div class="mt-6 flex flex-col items-center gap-2">
+     <button id="loadMore" class="bg-panel2 hover:bg-panel border border-line rounded-xl px-6 py-2.5 text-sm font-semibold text-onsub">Load more <span class="text-onmute">(${pool.length - nShown} more of ${state.limit ? state.limit : state.poolTotal})</span></button>
+   </div>` : ''}`;
   if(_qFocus){ const q=document.getElementById('q'); if(q){ q.value=state.q; q.focus({preventScroll:true}); try{ q.setSelectionRange(_qS,_qE); }catch(e){} } }
 
   // wire events
@@ -971,6 +989,12 @@ function render(spinner){
   $('#sort')?.addEventListener('change',e=>{state.sort=e.target.value;render(false);});
   $('#maxResults')?.addEventListener('change',e=>{state.limit=parseInt(e.target.value); if(isNaN(state.limit)) state.limit=100; setLimit(state.limit); doSearch();});
   $('#maxResults').value = String(state.limit);
+  // "Load more": reveal the next batch of the already-fetched pool. Instant (local
+  // slice) until the pool is exhausted — no refetch, no re-scrape.
+  $('#loadMore')?.addEventListener('click',()=>{
+    state.loaded = Math.min(state.loaded + LOAD_MORE_STEP, state.limit || state.poolTotal || Infinity);
+    render(false);
+  });
   $('#gear')?.addEventListener('click',openSettings);
   $('#bannerkey')?.addEventListener('click',openSettings);
   // channel picker (always visible; pick any services to filter results)
@@ -1012,7 +1036,7 @@ function showSubs(btn){
     (cid && have.has(cid) ? subs : others).push({name, color:PROV_COLOR[name]||'#334155'});
   });
   const rent=[...new Set((r.platforms||[]).filter(p=>p.type!=='flatrate'&&p.provider).map(p=>p.provider))];
-  m.innerHTML=`<div class="fixed inset-0 z-50 overflow-y-auto overscroll-contain" style="-webkit-overflow-scrolling:touch"><div class="absolute bg-black/80 backdrop-blur-sm" style="position:fixed;inset:0" data-x></div><div class="relative min-h-full flex items-center justify-center p-4 pb-24" style="pointer-events:none" data-x>
+  m.innerHTML=`<div class="fixed inset-0 z-50 overflow-y-auto overscroll-contain" style="padding-top:59px;-webkit-overflow-scrolling:touch"><div class="absolute bg-black/80 backdrop-blur-sm" style="position:fixed;inset:0" data-x></div><div class="relative min-h-full flex items-center justify-center p-4 pb-24" style="pointer-events:none" data-x>
     <div class="relative z-10 rounded-2xl border border-line fade p-6 w-full max-w-md" style="background:var(--c-panel);pointer-events:auto">
       <div class="flex items-center justify-between mb-3"><h3 class="text-lg font-bold">Where to watch — ${esc(r.title)}</h3><button data-x class="w-8 h-8 rounded-full field hoverable">✕</button></div>
       <div class="text-xs uppercase tracking-widest text-onmute mb-2">On your services</div>
@@ -1031,7 +1055,7 @@ function openDetail(title, kind){
   const r = allResults && (allResults.find(x=>x.title===title && x.kind===kind) || allResults.find(x=>x.title===title));
   if(!r) return;
   const m=$('#modal');
-  m.innerHTML = `<div class="fixed inset-0 z-50 overflow-y-auto overscroll-contain" style="-webkit-overflow-scrolling:touch"><div class="absolute bg-black/80 backdrop-blur-sm" style="position:fixed;inset:0"></div><div class="relative min-h-full flex items-center justify-center p-4 pb-24" data-close>
+  m.innerHTML = `<div class="fixed inset-0 z-50 overflow-y-auto overscroll-contain" style="padding-top:59px;-webkit-overflow-scrolling:touch"><div class="absolute bg-black/80 backdrop-blur-sm" style="position:fixed;inset:0"></div><div class="relative min-h-full flex items-center justify-center p-4 pb-24" data-close>
     <div class="relative z-10 w-full max-w-3xl rounded-2xl border border-line bg-ink overflow-hidden fade">
       <div class="relative h-56 md:h-72" style="${posterBg(r)}"><button class="absolute top-3 right-3 z-10 w-9 h-9 rounded-full bg-black/60 text-white/80 hover:bg-black/80" data-x>✕</button></div>
       <div id="detailBody" class="p-5 md:p-7 -mt-16 relative" style="background:var(--c-panel)">
@@ -1095,7 +1119,7 @@ function openDetail(title, kind){
 // ---------- actor popup: their films + shows ----------
 async function openActor(pid, name){
   const m=$('#modal');
-  m.innerHTML=`<div class="fixed inset-0 z-[55] overflow-y-auto overscroll-contain" style="-webkit-overflow-scrolling:touch"><div class="absolute bg-black/85 backdrop-blur-sm" style="position:fixed;inset:0"></div><div class="relative min-h-full flex items-center justify-center p-4 pb-24" data-ac>
+  m.innerHTML=`<div class="fixed inset-0 z-[55] overflow-y-auto overscroll-contain" style="padding-top:59px;-webkit-overflow-scrolling:touch"><div class="absolute bg-black/85 backdrop-blur-sm" style="position:fixed;inset:0"></div><div class="relative min-h-full flex items-center justify-center p-4 pb-24" data-ac>
     <div class="relative z-10 rounded-2xl border border-line fade p-6 w-full max-w-2xl" style="background:var(--c-panel)">
       <div class="flex items-center justify-between mb-4"><h3 class="text-xl font-black">🎬 ${esc(name||'Actor')}</h3><button data-x class="w-8 h-8 rounded-full field hoverable">✕</button></div>
       <div id="actorBody" class="text-onmute text-sm">Loading filmography…</div>
@@ -1131,7 +1155,7 @@ async function openSettings(){
   const badge=(on,txt)=>`<span class="text-xs px-2 py-0.5 rounded-full" style="background:${on===null||on===undefined?'var(--chip-bg)':on?'rgba(80,250,157,.15)':'rgba(245,197,24,.15)'};color:${on===null||on===undefined?'var(--c-onmute)':on?'#50fa9d':'#ffd866'}">${txt}</span>`;
   const unknown=(on)=>on===null||on===undefined;
   const m=$('#modal');
-  m.innerHTML=`<div class="fixed inset-0 z-50 overflow-y-auto overscroll-contain" style="-webkit-overflow-scrolling:touch"><div class="absolute inset-0 bg-black/80 backdrop-blur-sm" style="position:fixed"></div>
+  m.innerHTML=`<div class="fixed inset-0 z-50 overflow-y-auto overscroll-contain" style="padding-top:59px;-webkit-overflow-scrolling:touch"><div class="absolute inset-0 bg-black/80 backdrop-blur-sm" style="position:fixed"></div>
     <div class="relative min-h-full flex items-center justify-center p-4 pb-24" style="pointer-events:none"><div class="relative z-10 w-full max-w-lg rounded-2xl border border-line fade p-6" style="background:var(--c-panel);pointer-events:auto">
       <div class="flex items-center justify-between mb-1"><h2 class="text-2xl font-black">Settings</h2><button data-x class="w-9 h-9 rounded-full field hoverable">✕</button></div>
       <p class="text-onsub text-sm mb-5">API keys live on the Mac (in <code>backend/.env</code>) and are used automatically — you don't need to paste anything here. Subscriptions &amp; the backend address are stored on this device.${gate?'<br><span class="text-onmute text-xs">Keys are hidden here because the app is publicly accessible; they can only be changed on the Mac.</span>':''}</p>

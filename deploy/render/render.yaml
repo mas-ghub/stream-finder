@@ -9,8 +9,19 @@ services:
     startCommand: python -m app.main
     healthCheckPath: /api/meta
     autoDeploy: true
+    # Persistent disk: Render keeps this mounted across redeploys/restarts, so the
+    # backend's provider/cast/RT cache (SF_CACHE_FILE) survives a cold start and the
+    # first search after an idle period is fast instead of re-scraping everything.
+    # Enable in the dashboard: service → Disks → Attach → /opt/data (1GB free tier).
+    disks:
+      - name: sf-data
+        mountPath: /opt/data
+        sizeGB: 1
     # Render injects $PORT — the app already binds it (app/main.py __main__).
     # Set the real key values in the Render dashboard → service → Environment:
     #   SF_TMDB_API_KEY, SF_TMDB_V4_TOKEN, SF_SERPER_API_KEY (optional)
     env:
       SF_HOST: "0.0.0.0"
+      # Persist the cache on the mounted disk (falls back to /tmp if the disk
+      # isn't attached yet — /tmp works, it just resets on every deploy).
+      SF_CACHE_FILE: "/opt/data/sf_cache.json"
