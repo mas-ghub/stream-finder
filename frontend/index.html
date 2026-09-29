@@ -95,6 +95,10 @@ tailwind.config = {
 </style>
 </head>
 <body class="font-display">
+<!-- TEMP DIAGNOSTIC: a bright 8px bar pinned to the very top edge of the page.
+     If it hugs the physical top of the screen, the page starts under the notch.
+     If it sits clearly below the notch, the safe-area margin is working. -->
+<div id="sf_diag_top" style="position:fixed;top:0;left:0;right:0;height:8px;background:#ff00ff;z-index:9999" ></div>
 <div id="app" class="min-h-full max-w-[1400px] mx-auto px-4 md:px-8" style="padding-bottom:calc(env(safe-area-inset-bottom,0px) + 6rem)"></div>
 <div id="modal"></div>
 <div id="toast" class="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] hidden"></div>
@@ -317,7 +321,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.71';
+const APP_VERSION = '1.72-diag';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn() };
@@ -846,6 +850,7 @@ function render(spinner){
         <button id="theme" title="Toggle light / dark" class="chip px-3.5 py-2 rounded-full select-none">${currentTheme()==='dark'?'☀️ Light':'🌙 Dark'}</button>
         <button id="gear" title="Settings & keys" class="chip w-9 h-9 rounded-full flex items-center justify-center select-none" aria-label="Settings">⚙️</button>
         <span title="Build" class="tabular-nums text-[11px] px-2 py-1 rounded-full select-none" style="background:var(--c-line);color:var(--c-onmute)">v${APP_VERSION}</span>
+        <span id="sf_diag_px" title="Safe-area top inset reported by this device" class="tabular-nums text-[11px] px-2 py-1 rounded-full select-none" style="background:#ff00ff;color:#fff;font-weight:700">?px</span>
       </div>
     </div>
     ${window.__backendDown?`<div class="mt-4 flex flex-wrap items-start gap-3 rounded-xl border px-4 py-3 text-sm" style="background:var(--c-panel);border-color:#f59e0b;color:var(--c-onfg)"><span>⚠️</span><span style="color:var(--c-onfg)"><b>Couldn't load results.</b> Check your connection (and that the Mac is switched on), then tap <b>Retry</b>.<span class="block mt-1 text-xs" style="color:var(--c-onsub)">(Trying <code>${esc(API||'this server')}</code>)</span></span><button id="retry" class="ml-auto font-semibold rounded-lg px-4 py-2" style="background:#f59e0b;color:#000">Retry</button></div>`:''}
@@ -1262,6 +1267,8 @@ async function openSettings(){
     if(!myServicesOn) state.channels=ch;
   }catch(e){}
   render(false);
+  // TEMP DIAGNOSTIC: report the real safe-area inset this device gives us.
+  (function(){try{const el=document.getElementById('sf_diag_px');if(el){const probe=document.createElement('div');probe.style.cssText='position:fixed;top:0;height:env(safe-area-inset-top,0px);width:0';document.body.appendChild(probe);const px=probe.getBoundingClientRect().height;el.textContent=Math.round(px)+'px';probe.remove();}}catch(e){}})();
   // The very first request is the one that WAKES the sleeping free-tier cloud
   // backend (Render takes ~60s+ to answer). Cover that wait with a friendly
   // "waking up" screen instead of a bare "Searching…" grid — but only on the
