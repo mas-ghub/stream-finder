@@ -25,12 +25,22 @@ permissions:
 jobs:
   ping:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Ping the backend
         # -f = fail on HTTP errors so a down backend is visible in the run history;
         # --max-time keeps a hung wake from stalling the job; -o /dev/null = we only
-        # care that it answers, not what it says.
-        run: curl -sf --max-time 90 -o /dev/null "https://stream-finder-api.onrender.com/api/meta"
-        # Retries once if the cold start just barely missed the 90s window.
-        retry-on:
-          - connection_failure
+        # care that it answers, not what it says. Retries up to 3x (a cold start can
+        # take 60-120s; the first ping is usually the one that wakes it, so later
+        # retries are cheap). A total failure just logs — the next 20-min tick retries.
+        run: |
+          for i in 1 2 3; do
+            if curl -sf --max-time 90 -o /dev/null "https://stream-finder-api.onrender.com/api/meta"; then
+              echo "backend answered on attempt $i"
+              exit 0
+            fi
+            echo "attempt $i failed, retrying in 10s…"
+            sleep 10
+          done
+          echo "backend did not answer after 3 attempts" >&2
+          exit 1
