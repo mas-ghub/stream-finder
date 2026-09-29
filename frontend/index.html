@@ -54,17 +54,23 @@ tailwind.config = {
     --field-bg:rgba(15,23,42,.04); --chip-bg:rgba(15,23,42,.07); --chip-line:rgba(15,23,42,.16);
     --card-grad:#1b2436; --card-grad2:#0e1320; --scrollthumb:#cbd5e1; --hover:rgba(15,23,42,.05);
   }
-    /* In this PWA's standalone launch mode iOS gives a full-bleed viewport
-       (top:0 = physical screen edge, notch overlayed) and reports
-       safe-area-inset-top ≈ 0 (measured 7px on a real iPhone), so env() can't
-       be trusted. Two things fix the "full-page scrolling under the notch":
-       (1) a fixed 59px top padding pushes all content below the notch, and
-       (2) overscroll-behavior:contain on the scroller stops iOS's rubber-band
-       pull-down from dragging the top of the page up into the notch. */
-    html{height:100%;background:var(--c-ink);}
-    html,body{overscroll-behavior:contain;}
-    body{height:100%;padding-top:59px;box-sizing:border-box;}
-    body{background:radial-gradient(1200px 600px at 15% -10%, var(--c-grad) 0%, var(--c-ink) 55%);color:var(--c-onfg);transition:background .3s ease,color .3s ease;}
+     /* In this PWA's standalone launch mode iOS gives a full-bleed viewport
+        (top:0 = physical screen edge, notch overlayed) and reports
+        safe-area-inset-top ≈ 0 (measured 7px on a real iPhone), so env() can't
+        be trusted. Body padding alone does NOT reserve the notch area while
+        scrolling — the scroll container's top stays at the screen edge, so
+        content flows up into the notch and gets hidden. The fix: a FIXED top
+        bar (height 59px = status-bar+notch) that physically occupies that zone
+        at ALL scroll positions, with the scrollable content starting below it.
+        Content scrolls UNDER the bar; the bar always covers the notch. */
+     html{height:100%;background:var(--c-ink);}
+     html,body{overscroll-behavior:contain;}
+     body{height:100%;box-sizing:border-box;}
+     body{background:radial-gradient(1200px 600px at 15% -10%, var(--c-grad) 0%, var(--c-ink) 55%);color:var(--c-onfg);transition:background .3s ease,color .3s ease;}
+     /* The fixed notch bar. Opaque so scrolled content never shows through. */
+     #sf_topbar{position:fixed;top:0;left:0;right:0;height:59px;z-index:80;background:var(--c-ink);box-shadow:0 1px 0 var(--c-line);}
+     /* Content starts below the fixed bar. */
+     #app{padding-top:59px;}
   #app,#app>header,#app>section,#app>.mt-5{background:transparent;}
   #app{background-color:var(--c-ink);}
   .card-poster{background-size:cover;background-position:center top;transition:transform .25s ease, box-shadow .25s ease;}
@@ -103,6 +109,10 @@ tailwind.config = {
 </style>
 </head>
 <body class="font-display">
+<!-- Fixed notch bar: physically occupies the top 59px (status-bar + notch) at
+     every scroll position so scrollable content can never be hidden under the
+     notch. Content in #app starts below it. -->
+<div id="sf_topbar" aria-hidden="true"></div>
 <div id="app" class="min-h-full max-w-[1400px] mx-auto px-4 md:px-8" style="padding-bottom:calc(env(safe-area-inset-bottom,0px) + 6rem)"></div>
 <div id="modal"></div>
 <div id="toast" class="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] hidden"></div>
@@ -325,7 +335,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.77';
+const APP_VERSION = '1.78';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn() };
