@@ -54,16 +54,17 @@ tailwind.config = {
     --field-bg:rgba(15,23,42,.04); --chip-bg:rgba(15,23,42,.07); --chip-line:rgba(15,23,42,.16);
     --card-grad:#1b2436; --card-grad2:#0e1320; --scrollthumb:#cbd5e1; --hover:rgba(15,23,42,.05);
   }
-   html,body{height:100%;overscroll-behavior-y:none;}
-   html{background:var(--c-ink);}
-   /* Fixed top clearance for the iPhone notch / Dynamic Island.
-      In this PWA's standalone launch mode iOS gives a full-bleed viewport
-      (top:0 = physical screen edge) and reports safe-area-inset-top ≈ 0
-      (measured 7px on a real iPhone), so env() can't be trusted. A fixed
-      59px (standard status-bar + notch height) pushes the WHOLE page below
-      the notch. Non-notched phones just get a slightly larger top margin. */
-   body{padding-top:59px;}
-   body{background:radial-gradient(1200px 600px at 15% -10%, var(--c-grad) 0%, var(--c-ink) 55%);color:var(--c-onfg);transition:background .3s ease,color .3s ease;}
+    /* In this PWA's standalone launch mode iOS gives a full-bleed viewport
+       (top:0 = physical screen edge, notch overlayed) and reports
+       safe-area-inset-top ≈ 0 (measured 7px on a real iPhone), so env() can't
+       be trusted. Two things fix the "full-page scrolling under the notch":
+       (1) a fixed 59px top padding pushes all content below the notch, and
+       (2) overscroll-behavior:contain on the scroller stops iOS's rubber-band
+       pull-down from dragging the top of the page up into the notch. */
+    html{height:100%;background:var(--c-ink);}
+    html,body{overscroll-behavior:contain;}
+    body{height:100%;padding-top:59px;box-sizing:border-box;}
+    body{background:radial-gradient(1200px 600px at 15% -10%, var(--c-grad) 0%, var(--c-ink) 55%);color:var(--c-onfg);transition:background .3s ease,color .3s ease;}
   #app,#app>header,#app>section,#app>.mt-5{background:transparent;}
   #app{background-color:var(--c-ink);}
   .card-poster{background-size:cover;background-position:center top;transition:transform .25s ease, box-shadow .25s ease;}
@@ -324,7 +325,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.76';
+const APP_VERSION = '1.77';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn() };
