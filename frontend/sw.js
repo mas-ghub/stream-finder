@@ -4,7 +4,7 @@
    TMDB/RT data); this just keeps the UI itself available and fast. */
 // Bump on every app change so installed PWAs pick up the new index.html (a stale
 // cached index is the usual "my phone still shows the old build" cause).
-const CACHE = 'sf-shell-v38';
+const CACHE = 'sf-shell-v39';
 // Relative paths so the shell also caches when deployed under a repo subdir
 // (GitHub Pages: /stream-finder/), while still working at the origin root.
 // NB: sw.js is intentionally NOT pre-cached here. It must always come from the
@@ -20,7 +20,13 @@ self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches.keys().then((keys) =>
       Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
-    ).then(() => self.clients.claim())
+    )
+    // clients.claim() makes this newly-activated worker immediately control all
+    // already-open clients (incl. the installed PWA) instead of waiting for the
+    // next navigation. Combined with the page's one-time reload, an installed
+    // PWA now picks up a new shell on its next launch instead of staying on the
+    // old cached index.html forever (the iOS "Safari is new but the PWA is stale").
+    .then(() => self.clients.claim())
   );
 });
 

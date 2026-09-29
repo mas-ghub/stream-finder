@@ -322,7 +322,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.66';
+const APP_VERSION = '1.67';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn() };
@@ -1280,9 +1280,23 @@ async function openSettings(){
     // /stream-finder path prefix). A relative URL resolves against the page dir.
     const swUrl = new URL('sw.js', location.href).href;
     navigator.serviceWorker.register(swUrl).then(reg=>{
-      // Force an update on every load so an installed PWA picks up the newest
-      // shell (bumped cache name) without the user clearing anything.
+      // Force an update check on every load so an installed PWA picks up the
+      // newest shell (bumped cache name) without the user clearing anything.
       if(reg && reg.update) reg.update().catch(()=>{});
+      // If a new service worker installed in the background while we're loaded
+      // (the usual iOS "PWA still on the old build" case), reload ONCE so the
+      // fresh shell actually paints. clients.claim() in the new SW means the
+      // reload comes straight from the new cache. sessionStorage guard so we
+      // can never loop; the user is never held up for more than one load.
+      reg.addEventListener('updatefound', ()=>{
+        const nw = reg.installing; if(!nw) return;
+        nw.addEventListener('statechange', ()=>{
+          if(nw.state === 'installed' && navigator.serviceWorker.controller
+             && !sessionStorage.getItem('sf_sw_reload')){
+            try{ sessionStorage.setItem('sf_sw_reload','1'); setTimeout(()=>location.reload(), 400); }catch(e){}
+          }
+        });
+      });
     }).catch(e=>console.warn('SW register failed', e));
   }
   // Find a reachable backend before first use (home Wi‑Fi / Tailscale / ?backend=).
