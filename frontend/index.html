@@ -322,7 +322,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.67';
+const APP_VERSION = '1.68';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn() };
@@ -1279,15 +1279,28 @@ async function openSettings(){
     // Register relative to the page so the scope matches the app (incl. any
     // /stream-finder path prefix). A relative URL resolves against the page dir.
     const swUrl = new URL('sw.js', location.href).href;
-    navigator.serviceWorker.register(swUrl).then(reg=>{
-      // Force an update check on every load so an installed PWA picks up the
-      // newest shell (bumped cache name) without the user clearing anything.
+    navigator.serviceWorker.register(swUrl).then(async reg=>{
+      // 1) Force a network update check on every load so an installed PWA picks
+      //    up the newest shell (bumped cache name) without the user clearing anything.
       if(reg && reg.update) reg.update().catch(()=>{});
-      // If a new service worker installed in the background while we're loaded
-      // (the usual iOS "PWA still on the old build" case), reload ONCE so the
-      // fresh shell actually paints. clients.claim() in the new SW means the
-      // reload comes straight from the new cache. sessionStorage guard so we
-      // can never loop; the user is never held up for more than one load.
+      // 2) If a NEW worker is already waiting (installed by a previous visit while
+      //    this page was loaded), take it over immediately — no waiting for the
+      //    next navigation. This is what makes an already-stale PWA heal itself.
+      try{
+        const waiting = await navigator.serviceWorker.getRegistration().then(r=>r && r.waiting);
+        if(waiting && !sessionStorage.getItem('sf_sw_takeover')){
+          try{ sessionStorage.setItem('sf_sw_takeover','1'); }catch(e){}
+          const ok = new Promise(res=>{
+            waiting.addEventListener('statechange',()=>{ if(waiting.state==='activated') res(true); });
+            setTimeout(()=>res(false), 2500);
+          });
+          try{ awaiting.postMessage({type:'SKIP_WAITING'}); }catch(e){}
+          if(await ok){ setTimeout(()=>location.reload(), 150); }
+        }
+      }catch(e){}
+      // 3) If a new worker installs in the background while we're loaded (the usual
+      //    iOS "PWA still on the old build" case), reload ONCE so the fresh shell
+      //    actually paints. sessionStorage guards (per load) so we can never loop.
       reg.addEventListener('updatefound', ()=>{
         const nw = reg.installing; if(!nw) return;
         nw.addEventListener('statechange', ()=>{
