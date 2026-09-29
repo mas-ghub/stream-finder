@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.masparrow.stream-finder.keepalive</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>/Users/marksparrow/testai/stream-finder/sf-keepalive.sh</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<!-- Restart if the loop ever exits, so the keep-alive is durable while the
+	     Mac is booted. (When the Mac is off, this simply isn't running — the
+	     cloud backend sleeps, exactly the "do nothing differently" behaviour.) -->
+	<key>KeepAlive</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>/tmp/sf_keepalive.launchd.log</string>
+	<key>StandardErrorPath</key>
+	<string>/tmp/sf_keepalive.launchd.log</string>
+</dict>
+</plist>
