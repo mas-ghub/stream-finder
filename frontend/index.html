@@ -54,13 +54,8 @@ tailwind.config = {
     --field-bg:rgba(15,23,42,.04); --chip-bg:rgba(15,23,42,.07); --chip-line:rgba(15,23,42,.16);
     --card-grad:#1b2436; --card-grad2:#0e1320; --scrollthumb:#cbd5e1; --hover:rgba(15,23,42,.05);
   }
-   html,body{height:100%;height:100dvh;overscroll-behavior-y:none;}
+   html,body{height:100%;overscroll-behavior-y:none;}
    html{background:var(--c-ink);}
-   /* Keep the UI clear of the iPhone notch / Dynamic Island. env(safe-area-inset-*)
-      is the exact notch height in a full-viewport PWA (0 on non-notched screens);
-      the 20px floor guarantees visible breathing room even if the inset reports 0
-      (e.g. launched as a standalone app without cover, or older Safari). */
-   body{padding-top:calc(env(safe-area-inset-top,0px) + 20px);padding-bottom:calc(env(safe-area-inset-bottom,0px) + 8px);}
    body{background:radial-gradient(1200px 600px at 15% -10%, var(--c-grad) 0%, var(--c-ink) 55%);color:var(--c-onfg);transition:background .3s ease,color .3s ease;}
   #app,#app>header,#app>section,#app>.mt-5{background:transparent;}
   #app{background-color:var(--c-ink);}
@@ -322,7 +317,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.68';
+const APP_VERSION = '1.69';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn() };
@@ -839,9 +834,9 @@ function render(spinner){
   // (its first request is waking the sleeping cloud server). Don't let it flash —
   // trigger the "waking up" state here so the animated placeholder renders instead.
   if(!tmdbOn && !_waking && !window.__backendDown) wakeOverlay(true);
-  app.innerHTML = `
-  <header class="pt-7 pb-5">
-    <div class="flex items-end justify-between flex-wrap gap-3">
+   app.innerHTML = `
+   <header class="pb-5" style="padding-top:calc(env(safe-area-inset-top,0px) + 1rem)">
+     <div class="flex items-end justify-between flex-wrap gap-3">
       <div>
         <h1 class="text-3xl md:text-4xl font-black tracking-tight">Stream <span class="text-accent">Finder</span></h1>
         <p class="text-onsub mt-0.5 text-sm">One search across every screen.</p>
