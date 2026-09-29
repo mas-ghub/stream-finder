@@ -95,7 +95,7 @@ tailwind.config = {
 </style>
 </head>
 <body class="font-display">
-<div id="app" class="min-h-full max-w-[1400px] mx-auto px-4 md:px-8 pb-24"></div>
+<div id="app" class="min-h-full max-w-[1400px] mx-auto px-4 md:px-8" style="padding-bottom:calc(env(safe-area-inset-bottom,0px) + 6rem)"></div>
 <div id="modal"></div>
 <div id="toast" class="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] hidden"></div>
 
@@ -317,7 +317,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.69';
+const APP_VERSION = '1.70';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn() };
@@ -835,7 +835,7 @@ function render(spinner){
   // trigger the "waking up" state here so the animated placeholder renders instead.
   if(!tmdbOn && !_waking && !window.__backendDown) wakeOverlay(true);
    app.innerHTML = `
-   <header class="pb-5" style="padding-top:calc(env(safe-area-inset-top,0px) + 1rem)">
+   <header class="pb-5" style="padding-top:max(44px, calc(env(safe-area-inset-top,0px) + 1rem))">
      <div class="flex items-end justify-between flex-wrap gap-3">
       <div>
         <h1 class="text-3xl md:text-4xl font-black tracking-tight">Stream <span class="text-accent">Finder</span></h1>
