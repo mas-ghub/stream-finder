@@ -95,6 +95,10 @@ tailwind.config = {
 </style>
 </head>
 <body class="font-display">
+<!-- PROOF STRIP: if you can see this yellow band with a BUILD number on your
+     iPhone, the new shell is loaded. If it's NOT there, the PWA is still
+     serving an old cached build and we deal with that instead. -->
+<div id="sf_proof" style="position:sticky;top:0;z-index:9999;background:#facc15;color:#000;font:700 13px/1.4 system-ui;text-align:center;padding:5px 8px calc(5px + env(safe-area-inset-bottom,0px))">BUILD ? — top safe-area test</div>
 <div id="app" class="min-h-full max-w-[1400px] mx-auto px-4 md:px-8" style="padding-bottom:calc(env(safe-area-inset-bottom,0px) + 6rem)"></div>
 <div id="modal"></div>
 <div id="toast" class="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] hidden"></div>
@@ -317,7 +321,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.73';
+const APP_VERSION = '1.74';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn() };
@@ -1267,6 +1271,8 @@ async function openSettings(){
     if(!myServicesOn) state.channels=ch;
   }catch(e){}
   render(false);
+  // Set the proof-strip version label.
+  (function(){try{const p=document.getElementById('sf_proof');if(p)p.textContent='BUILD '+APP_VERSION+' — top safe-area test';}catch(e){}})();
   // The very first request is the one that WAKES the sleeping free-tier cloud
   // backend (Render takes ~60s+ to answer). Cover that wait with a friendly
   // "waking up" screen instead of a bare "Searching…" grid — but only on the
