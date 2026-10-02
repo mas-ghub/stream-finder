@@ -335,7 +335,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.84';
+const APP_VERSION = '1.85';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, total:0, loadingMore:false, checkedAt:null };
@@ -910,6 +910,54 @@ function card(r){
   </div>`;
 }
 
+
+// "Load more" (button at the bottom AND the floating bar): reveal the next batch of the
+// already-fetched pool (instant, local); once that is exhausted, fetch the NEXT PAGE from
+// the server — so browsing deep costs small requests instead of one huge one.
+function loadMoreNow(){
+  const pool=allResults||[];
+  if(pool.length > state.loaded){          // still have fetched-but-hidden cards
+    state.loaded = Math.min(state.loaded + LOAD_MORE_STEP, pool.length);
+    render(false);
+    return;
+  }
+  const cap = state.limit || Infinity;                       // Max results (0 = All)
+  const total = Math.min(state.total || 0, cap);
+  if(!pool.length || pool.length >= total || state.loadingMore) return;
+  const intBefore = pool.length;
+  state.loadingMore = true; render(false);
+  Promise.resolve(doSearch({offset: pool.length})).finally(()=>{
+    state.loadingMore=false;
+    const intAdded = (allResults||[]).length - intBefore;
+    if(intAdded>0) showToast(`+${intAdded} loaded · ${(allResults||[]).length} of ${total}`);
+    else showToast('No more results came back — try Load more again');
+    render(false);
+  });
+}
+
+let _toastTimer=0;
+function showToast(strMsg){
+  const el=$('#toast'); if(!el) return;
+  el.innerHTML=`<div class="bg-accent text-white text-sm font-semibold rounded-full px-4 py-2 shadow-lg">${esc(strMsg)}</div>`;
+  el.classList.remove('hidden');
+  clearTimeout(_toastTimer); _toastTimer=setTimeout(()=>el.classList.add('hidden'),3500);
+}
+
+// Floating "Showing N of M" bar — always on screen while there is more to browse (or a page
+// is loading), so you can tell the list isn't finished even when the bottom isn't in view.
+function updateMoreBar(intShown, intTotal, blnMore, blnBusy){
+  let el=document.getElementById('moreBar');
+  if(!el){
+    el=document.createElement('button'); el.id='moreBar';
+    el.className='fixed bottom-4 right-4 z-50 bg-accent text-white text-sm font-semibold rounded-full px-4 py-2 shadow-lg';
+    el.addEventListener('click',loadMoreNow);
+    document.body.appendChild(el);
+  }
+  if(!blnMore && !blnBusy){ el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  el.textContent = blnBusy ? `Loading more… (${intShown} of ${intTotal})` : `Showing ${intShown} of ${intTotal} · Load more ▾`;
+}
+
 function render(spinner){
   const tmdbOn = META.sources.find(s=>s.key==='tmdb')?.configured || META._tmdbKey;
   // Apply the household "only what I can stream" filter (provider data is client-side).
@@ -1060,6 +1108,7 @@ function render(spinner){
    ${(!spinner && subs.length && hasMore) ? `<div class="mt-6 flex flex-col items-center gap-2">
      <button id="loadMore" class="bg-panel2 hover:bg-panel border border-line rounded-xl px-6 py-2.5 text-sm font-semibold text-onsub">${state.loadingMore?'Loading…':'Load more'} <span class="text-onmute">${state.loadingMore?'':(pool.length - nShown > 0 ? `(${pool.length - nShown} ready)` : `(${Math.max(0, Math.min(state.total||0, poolCap===Infinity?state.total||0:poolCap) - pool.length)} more on the server)`)}</span></button>
    </div>` : ''}`;
+  updateMoreBar(nShown, Math.max(Math.min(state.total||0, poolCap===Infinity?(state.total||0):poolCap), pool.length), !spinner && subs.length>0 && hasMore, !!state.loadingMore);
   if(_qFocus){ const q=document.getElementById('q'); if(q){ q.value=state.q; q.focus({preventScroll:true}); try{ q.setSelectionRange(_qS,_qE); }catch(e){} } }
 
   // wire events
@@ -1089,19 +1138,7 @@ function render(spinner){
   // "Load more": reveal the next batch of the already-fetched pool (instant, local);
   // once the fetched pool is exhausted, fetch the NEXT PAGE from the server — so
   // browsing deep costs small requests instead of one huge one.
-  $('#loadMore')?.addEventListener('click',()=>{
-    const pool=allResults||[];
-    if(pool.length > state.loaded){          // still have fetched-but-hidden cards
-      state.loaded = Math.min(state.loaded + LOAD_MORE_STEP, pool.length);
-      render(false);
-      return;
-    }
-    const cap = state.limit || Infinity;                       // Max results (0 = All)
-    const total = Math.min(state.total || 0, cap);
-    if(!pool.length || pool.length >= total || state.loadingMore) return;
-    state.loadingMore = true; render(false);
-    Promise.resolve(doSearch({offset: pool.length})).finally(()=>{ state.loadingMore=false; });
-  });
+  $('#loadMore')?.addEventListener('click',loadMoreNow);
   $('#gear')?.addEventListener('click',openSettings);
   $('#bannerkey')?.addEventListener('click',openSettings);
   // channel picker (always visible; pick any services to filter results)

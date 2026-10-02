@@ -33,15 +33,15 @@ permissions:
 jobs:
   ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 15
     steps:
       - name: Ping the backend (with jitter)
-        # $RANDOM gives 0-32767; mod 600 → a 0-10 min random delay so the pings
+        # $RANDOM gives 0-32767; mod 600 → a 0-2 min random delay so the pings
         # aren't on a fixed metronome. Then ping with a few retries (a cold start
         # can take 60-120s; the first ping is usually what wakes it).
         run: |
-          echo "sleeping $((RANDOM % 600))s (randomized) before ping"
-          sleep $((RANDOM % 600))
+          echo "sleeping $((RANDOM % 120))s (randomized) before ping"
+          sleep $((RANDOM % 120))
           for i in 1 2 3; do
             if curl -sf --max-time 90 -o /dev/null "https://stream-finder-api.onrender.com/api/meta"; then
               echo "backend answered on attempt $i"
