@@ -647,12 +647,18 @@ async def _tmdb_discover(kind: str, genres: list[str], year_min: int | None = No
         # Let TMDB filter by service server-side (free, exact): the pool COMES BACK
         # as "titles on these services", so no per-title provider scan is needed to
         # build the result set — only the displayed cards need their chips attached.
-        base["with_watch_provider"] = "|".join(str(int(i)) for i in prov_ids)
+        # NOTE the plural: TMDB's param is with_watch_providerS (the singular is
+        # silently ignored — discovered the hard way when "prefiltered" Horror
+        # turned out to be full of non-Netflix titles).
+        base["with_watch_providers"] = "|".join(str(int(i)) for i in prov_ids)
         base["watch_region"] = "GB"
         # Popular first: a service browse is "what's on Netflix in this mood", and
         # vote_average ordering led with obscure high-rated international titles.
-        # The client can still re-sort locally (Top rated / RT / newest…).
+        # The client can still re-sort locally (Top rated / RT / newest…). The vote
+        # floor also relaxes here: provider-filtered pools are small, and the global
+        # 150-vote floor would cut a 64-title pool to 27.
         base["sort_by"] = "popularity.desc"
+        base["vote_count.gte"] = "30"
     if year_min:
         base[f"{dkey}.gte"] = f"{int(year_min)}-01-01"
     if year_max:
@@ -1317,7 +1323,8 @@ async def search(
     prov_ids = provider_ids_for(q.channels) if (q.channels and tmdb_on) else []
     # (Only the DISCOVER browse can carry the provider pre-filter — a text search
     # uses _tmdb_search, which has no such filter, so it keeps the scan+filter path.)
-    prefiltered = bool(q.channels) and bool(prov_ids) and not q.q and all(PROVIDER_IDS.get(c) for c in q.channels)
+    prefiltered = bool(q.channels) and bool(prov_ids) and not q.q \
+        and all(PROVIDER_IDS.get(c) for c in q.channels)
     tasks: list[tuple] = []
     if q.q:
         if tmdb_on:

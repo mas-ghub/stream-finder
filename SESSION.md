@@ -1048,6 +1048,23 @@ Also: on a prefiltered browse the displayed page's chips attach BEFORE the RT pa
 cards land immediately instead of after a silent ratings scrape (first cards ~4s locally).
 Frontend sends `rt_on` / `rt_off` per its setting; version 1.83, shell v55.
 
+## CRITICAL FIX (v1.84 addendum) — `with_watch_provider` → `with_watch_providers` (plural)
+
+TMDB's discover param is **`with_watch_providers`** (plural). The SINGULAR form is silently
+ignored — no error, just an unfiltered query. So every "prefiltered" browse since the v1.84
+deploy actually returned titles from ALL services with the channel filter skipped (Horror +
+Netflix: only 5 of 96 provider-checked cards were on Netflix; the Sports keyword query was
+completely unfiltered). This is what the user saw as "it's not looking at the genre".
+
+Verified with the plural: Horror + Netflix 100/100 Netflix, Documentary + Netflix 100/100,
+Sports + Netflix 68/68 (the plural DOES work with `with_keywords`, so the Sports mood uses
+the prefilter too — no special case needed). The vote floor on provider-filtered pools is
+relaxed 150 → 30 (a 64-title pool would otherwise shrink to 27).
+
+LESSON: when TMDB returns results that look unfiltered, diff the total_results against the
+same query without the new param — a misnamed param is silent.
+
+
 
 
 
