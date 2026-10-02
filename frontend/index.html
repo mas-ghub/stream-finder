@@ -335,7 +335,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.89';
+const APP_VERSION = '1.90';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, total:0, loadingMore:false, checkedAt:null };
@@ -930,7 +930,7 @@ function loadMoreNow(){
   Promise.resolve(doSearch({offset: pool.length})).finally(()=>{
     state.loadingMore=false;
     const intAdded = (allResults||[]).length - intBefore;
-    if(intAdded>0) showToast(`+${intAdded} loaded · ${(allResults||[]).length} of ${total}`);
+    if(intAdded>0) showToast(`+${intAdded} loaded · ${(allResults||[]).length.toLocaleString()} of ${total.toLocaleString()}`);
     else showToast('No more results came back — try Load more again');
     render(false);
   });
@@ -955,7 +955,7 @@ function updateMoreBar(intShown, intTotal, blnMore, blnBusy){
     document.body.appendChild(el);
   }
   if(!blnMore && !blnBusy){ el.classList.add('hidden'); return; }
-  el.textContent = blnBusy ? `Loading more… (${intShown} of ${intTotal})` : `Showing ${intShown} of ${intTotal} · Load more ▾`;
+  el.textContent = blnBusy ? `Loading more… (${intShown.toLocaleString()} of ${intTotal.toLocaleString()})` : `Showing ${intShown.toLocaleString()} of ${intTotal.toLocaleString()} · Load more ▾`;
   // The bar is for when the real Load more button is OUT of view. When that button is on
   // screen the bar hides, so the two never sit on top of each other.
   el.classList.remove('hidden');

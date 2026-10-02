@@ -1370,6 +1370,154 @@ async def _serve_page(q, ordered: list, pid: str | None) -> dict:
 
 
 
+# ---------------------------------------------------------------------------
+# True paging for service browses
+#
+# A plain service browse (optionally + genre/mood/year/English) is fully described by
+# TMDB's own discover filters, so page N of the app is just the matching slice of TMDB's
+# own paging — no need to download a big pool up front. That is what lets "Netflix" be
+# the whole catalogue (thousands of titles) instead of the top ~240, while every request
+# stays small (2-6 TMDB calls + one page of provider chips) on the free instance.
+# ---------------------------------------------------------------------------
+_TOTALS_CACHE: dict[str, tuple[float, int]] = {}
+_TOTALS_TTL = 15 * 60
+_TMDB_MAX_PAGE = 500          # TMDB refuses pages beyond this (10,000 results)
+
+
+def _can_true_page(q: Query, prov_ids: list[int], tmdb_on: bool) -> bool:
+    if not (tmdb_on and prov_ids and q.channels and not q.q):
+        return False
+    if q.sort != "relevance" or q.min_rt or q.min_rating or q.free_only:
+        return False        # these need data a discover page doesn't have -> old capped path
+    names = list(q.genres) + (genres_for_mood(q.mood) if q.mood else [])
+    gids = {_GENRE_IDS["movie"].get(normalize_genre(g) or g) for g in names}
+    if _SPORTS_GENRE_ID in gids and len(gids) > 1:
+        return False        # sports is a keyword, not a genre: don't mix it with real genres
+    return True
+
+
+def _browse_params(q: Query, kind: str, prov_ids: list[int]) -> dict[str, str] | None:
+    """TMDB discover params for one kind, or None if this kind can't match the genres."""
+    dkey = "primary_release_date" if kind == "movie" else "first_air_date"
+    p: dict[str, str] = {"sort_by": "popularity.desc", f"{dkey}.gte": "1950-01-01",
+                         "with_watch_providers": "|".join(str(int(i)) for i in prov_ids),
+                         "watch_region": "GB"}
+    if q.year_min:
+        p[f"{dkey}.gte"] = f"{int(q.year_min)}-01-01"
+    if q.year_max:
+        p[f"{dkey}.lte"] = f"{int(q.year_max)}-12-31"
+    if q.english_only:
+        p["with_origin_language"] = "en"
+    if q.channels and set(q.channels) <= UK_ONLY:
+        p["with_origin_country"] = "GB"
+    names = list(q.genres) + (genres_for_mood(q.mood) if q.mood else [])
+    if names:
+        gmap = _GENRE_IDS["movie" if kind == "movie" else "show"]
+        gids = {gmap.get(normalize_genre(g) or g) for g in names} - {None}
+        if _SPORTS_GENRE_ID in {gmap.get(normalize_genre(g) or g) for g in names} or \
+           _SPORTS_GENRE_ID in gids:
+            p["with_keywords"] = str(_SPORTS_KEYWORD)
+            gids = {g for g in gids if g != _SPORTS_GENRE_ID}
+        if gids:
+            p["with_genres"] = "|".join(str(g) for g in sorted(gids))   # pipe = OR
+        elif "with_keywords" not in p:
+            return None     # asked for genres this kind doesn't have (e.g. Horror on TV)
+    return p
+
+
+async def _browse_fetch(path: str, params: dict[str, str], page: int) -> dict:
+    r = await _tmdb_get(f"{TMDB_BASE}/{path}", {**params, "page": page})
+    if r.status_code in (429, 500, 502, 503):
+        await asyncio.sleep(0.6)
+        r = await _tmdb_get(f"{TMDB_BASE}/{path}", {**params, "page": page})
+    r.raise_for_status()
+    return r.json()
+
+
+async def _browse_page(q: Query, prov_ids: list[int], pid: str | None) -> dict:
+    limit = min(max(q.limit, 0) or 60, settings.max_results)
+    offset = max(0, q.offset)
+    kinds = ["movie"] if q.kind == "movie" else (["show"] if q.kind == "show" else ["movie", "show"])
+    plans = []
+    for k in kinds:
+        prm = _browse_params(q, k, prov_ids)
+        if prm is not None:
+            plans.append((k, "discover/movie" if k == "movie" else "discover/tv", prm))
+    if not plans:
+        return {"results": [], "count": 0, "total": 0}
+    sem = asyncio.Semaphore(6)
+    cache: dict[tuple, dict] = {}
+
+    async def page(path: str, prm: dict, n: int) -> dict:
+        key = (path, n)
+        if key not in cache:
+            async with sem:
+                cache[key] = await _browse_fetch(path, prm, n)
+        return cache[key]
+
+    # Total per kind (page 1 doubles as the first slice's data when it's needed anyway).
+    totals: dict[str, int] = {}
+    async def total_of(k, path, prm):
+        tk = f"{k}|{json.dumps(prm, sort_keys=True)}"
+        hit = _TOTALS_CACHE.get(tk)
+        if hit and time.time() - hit[0] < _TOTALS_TTL:
+            return hit[1]
+        d = await page(path, prm, 1)
+        t = min(int(d.get("total_results") or 0), _TMDB_MAX_PAGE * 20)
+        _TOTALS_CACHE[tk] = (time.time(), t)
+        return t
+    got = await asyncio.gather(*(total_of(k, path, prm) for k, path, prm in plans))
+    for (k, _, _), t in zip(plans, got):
+        totals[k] = t
+    grand = sum(totals.values())
+    if pid:
+        _progress(pid, phase="pulled", done=0, total=limit)
+    # Each kind contributes its proportional share of this page, so every kind is
+    # exhausted on the same final page (no kind runs dry early or starves).
+    wants = []
+    for k, path, prm in plans:
+        if grand <= 0:
+            continue
+        a = round(offset * totals[k] / grand)
+        b = min(round((offset + limit) * totals[k] / grand), totals[k])
+        if b > a:
+            wants.append((k, path, prm, a, b))
+
+    async def slice_of(k, path, prm, a, b):
+        pages = range(a // 20 + 1, (b - 1) // 20 + 2)
+        datas = await asyncio.gather(*(page(path, prm, n) for n in pages if n <= _TMDB_MAX_PAGE),
+                                     return_exceptions=True)
+        items: list[dict] = []
+        for n, d in zip([n for n in pages if n <= _TMDB_MAX_PAGE], datas):
+            if isinstance(d, Exception):
+                log.debug("browse page raised %s", d)
+                continue
+            items.extend((it, (n - 1) * 20 + i) for i, it in enumerate(d.get("results", [])))
+        return [_map_tmdb(it, k) for it, idx in items if a <= idx < b]
+    parts = await asyncio.gather(*(slice_of(*w) for w in wants))
+    # Interleave the kinds by rank so a page mixes films and series, most popular first.
+    merged: list[Result] = []
+    maxlen = max((len(x) for x in parts), default=0)
+    for i in range(maxlen):
+        for x in parts:
+            if i < len(x):
+                merged.append(x[i])
+    seen: set = set()
+    page_results = [r for r in merged if not (r.tmdb_id in seen or seen.add(r.tmdb_id))]
+    names = {g.lower() for g in list(q.genres) + (genres_for_mood(q.mood) if q.mood else [])}
+    if names:
+        for r in page_results:
+            r.genres.sort(key=lambda g: g.lower() not in names)
+    if pid:
+        _progress(pid, phase="finishing", done=0, total=len(page_results))
+    await _gather_bounded([_attach_providers(r) for r in page_results], 16,
+                          progress_key=pid, progress_phase="finishing", progress_total=len(page_results),
+                          results=page_results, only_provided=True, snap_every=10)
+    if pid:
+        PROGRESS.pop(pid, None)
+    return {"results": [r.to_dict() for r in page_results], "count": len(page_results), "total": grand}
+
+
 def _cancel_on_disconnect(fn):
     """Stop a request's work the moment the client hangs up.
 
@@ -1455,6 +1603,9 @@ async def search(
         _hit = _POOL_CACHE.get(_pool_ck)
         if _hit and time.time() - _hit[0] < _POOL_TTL:
             return await _serve_page(q, _hit[1], pid)   # "Load more": a slice of the cached pool
+    _bp_ids = provider_ids_for(q.channels) if (q.channels and tmdb_on) else []
+    if _can_true_page(q, _bp_ids, tmdb_on):
+        return await _browse_page(q, _bp_ids, pid)   # service browse: page straight through TMDB
     if pid:
         _progress(pid, phase="starting")
     results: list[Result] = []
