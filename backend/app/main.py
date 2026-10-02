@@ -1421,7 +1421,7 @@ _RATING_VOTE_FLOOR = {"movie": "200", "show": "100"}
 def _can_true_page(q: Query, prov_ids: list[int], tmdb_on: bool) -> bool:
     if not (tmdb_on and prov_ids and q.channels and not q.q):
         return False
-    if q.sort not in _TMDB_SORTS or q.min_rt or q.min_rating or q.free_only:
+    if q.sort not in _TMDB_SORTS or q.min_rt or q.free_only:
         return False        # these need data a discover page doesn't have -> old capped path
     names = list(q.genres) + (genres_for_mood(q.mood) if q.mood else [])
     gids = {_GENRE_IDS["movie"].get(normalize_genre(g) or g) for g in names}
@@ -1438,6 +1438,11 @@ def _browse_params(q: Query, kind: str, prov_ids: list[int]) -> dict[str, str] |
                          "with_watch_providers": "|".join(str(int(i)) for i in prov_ids),
                          "watch_region": "GB"}
     if q.sort in ("rating", "tmdb"):
+        p["vote_count.gte"] = _RATING_VOTE_FLOOR[kind]
+    if q.min_rating:
+        # "Rated N+" is TMDB's own filter (whole catalogue, not just what's loaded). The vote
+        # floor keeps a 9.5 from three votes out of a "90%+" list.
+        p["vote_average.gte"] = str(float(q.min_rating))
         p["vote_count.gte"] = _RATING_VOTE_FLOOR[kind]
     if q.year_min:
         p[f"{dkey}.gte"] = f"{int(q.year_min)}-01-01"
@@ -1475,27 +1480,37 @@ async def _browse_page(q: Query, prov_ids: list[int], pid: str | None) -> dict:
     limit = min(max(q.limit, 0) or 60, settings.max_results)
     offset = max(0, q.offset)
     kinds = ["movie"] if q.kind == "movie" else (["show"] if q.kind == "show" else ["movie", "show"])
-    plans = []
+    # A "lane" is one TMDB discover list in the chosen order. Normally one per kind. For the
+    # rating sorts each kind has TWO: well-voted titles first, then the thinly-voted rest
+    # (also by rating) — so the whole catalogue is reachable, but a 10.0 from three votes
+    # can never top the list.
+    lanes: list[tuple[str, str, str, dict, int]] = []     # (name, kind, path, params, segment)
     for k in kinds:
         prm = _browse_params(q, k, prov_ids)
-        if prm is not None:
-            plans.append((k, "discover/movie" if k == "movie" else "discover/tv", prm))
-    if not plans:
+        if prm is None:
+            continue
+        path = "discover/movie" if k == "movie" else "discover/tv"
+        lanes.append((k, k, path, prm, 0))
+        if q.sort in ("rating", "tmdb") and not q.min_rating:
+            floor = int(_RATING_VOTE_FLOOR[k])
+            low = {kk: vv for kk, vv in prm.items() if kk != "vote_count.gte"}
+            low["vote_count.lte"] = str(floor - 1)
+            lanes.append((f"{k}_low", k, path, low, 1))
+    if not lanes:
         return {"results": [], "count": 0, "total": 0}
     sem = asyncio.Semaphore(6)
     cache: dict[tuple, dict] = {}
 
     async def page(path: str, prm: dict, n: int) -> dict:
-        key = (path, n)
+        key = (path, json.dumps(prm, sort_keys=True), n)
         if key not in cache:
             async with sem:
                 cache[key] = await _browse_fetch(path, prm, n)
         return cache[key]
 
-    # Total per kind (page 1 doubles as the first slice's data when it's needed anyway).
     totals: dict[str, int] = {}
-    async def total_of(k, path, prm):
-        tk = f"{k}|{json.dumps(prm, sort_keys=True)}"
+    async def total_of(name, path, prm):
+        tk = f"{name}|{path}|{json.dumps(prm, sort_keys=True)}"
         hit = _TOTALS_CACHE.get(tk)
         if hit and time.time() - hit[0] < _TOTALS_TTL:
             return hit[1]
@@ -1503,32 +1518,47 @@ async def _browse_page(q: Query, prov_ids: list[int], pid: str | None) -> dict:
         t = min(int(d.get("total_results") or 0), _TMDB_MAX_PAGE * 20)
         _TOTALS_CACHE[tk] = (time.time(), t)
         return t
-    got = await asyncio.gather(*(total_of(k, path, prm) for k, path, prm in plans))
-    for (k, _, _), t in zip(plans, got):
-        totals[k] = t
+    got = await asyncio.gather(*(total_of(nm, path, prm) for nm, _, path, prm, _ in lanes))
+    for (nm, _, _, _, _), t in zip(lanes, got):
+        totals[nm] = t
     grand = sum(totals.values())
     if pid:
         _progress(pid, phase="pulled", done=0, total=limit)
-    # Exact global order across kinds: each kind's list is already in the chosen order, so
-    # the page is a k-way merge of the NEXT `limit` items from each kind, keeping the first
-    # `limit` by the sort key. A per-query cursor (how many of each kind are already used)
-    # is remembered when a page is served, so the next page continues exactly. With no
-    # cursor (first visit to that offset, e.g. after a restart) it is estimated from the
-    # kinds' share of the total, which is only approximately ordered at that one seam.
+    # Exact global order: each lane is already in the chosen order, so a page is a k-way
+    # merge of the NEXT `limit` items from each lane, keeping the first `limit` by the sort
+    # key (segment first, so well-voted titles always precede the thinly-voted ones). A
+    # per-query cursor (how many of each lane are used) is remembered when a page is served,
+    # so the next page continues exactly. With no cursor (first visit to that offset, e.g.
+    # after a restart) it is estimated from the lanes' totals — only approximately ordered
+    # at that one seam.
     qkey = _pool_key(q)
+    names_l = [nm for nm, *_ in lanes]
     cur = None
     if offset == 0:
-        cur = {k: 0 for k, _, _ in plans}
+        cur = {nm: 0 for nm in names_l}
     else:
         hit = _CURSORS.get(f"{qkey}|{offset}")
         if hit and time.time() - hit[0] < _CURSOR_TTL:
             cur = dict(hit[1])
     if cur is None:
-        cur = {k: round(offset * totals[k] / grand) if grand else 0 for k, _, _ in plans}
+        cur = {nm: 0 for nm in names_l}
+        left = offset
+        for seg in (0, 1):
+            ln = [(nm, totals[nm]) for nm, _, _, _, sg in lanes if sg == seg]
+            tot = sum(t for _, t in ln)
+            if not tot or left <= 0:
+                continue
+            take = min(left, tot)
+            for nm, t in ln:
+                cur[nm] = round(take * t / tot)
+            left -= take
     sk = _browse_sort_key(q.sort)
+    seg0_left = sum(max(0, totals[nm] - cur.get(nm, 0)) for nm, _, _, _, sg in lanes if sg == 0)
 
-    async def window_of(k, path, prm):
-        a, b = cur.get(k, 0), min(cur.get(k, 0) + limit, totals[k])
+    async def window_of(name, kind, path, prm, seg):
+        if seg == 1 and seg0_left > limit:
+            return []          # the well-voted lanes still fill this page: don't touch the rest yet
+        a, b = cur.get(name, 0), min(cur.get(name, 0) + limit, totals[name])
         if b <= a:
             return []
         pnums = [n for n in range(a // 20 + 1, (b - 1) // 20 + 2) if n <= _TMDB_MAX_PAGE]
@@ -1540,23 +1570,23 @@ async def _browse_page(q: Query, prov_ids: list[int], pid: str | None) -> dict:
                 continue
             for i, it in enumerate(d.get("results", [])):
                 if a <= (n - 1) * 20 + i < b:
-                    out.append((k, it))
+                    out.append((name, kind, seg, it))
         return out
-    wins = await asyncio.gather(*(window_of(k, path, prm) for k, path, prm in plans))
+    wins = await asyncio.gather(*(window_of(nm, kd, path, prm, sg) for nm, kd, path, prm, sg in lanes))
     cand = [x for w in wins for x in w]
-    cand.sort(key=lambda kv: sk(kv[1]))
+    cand.sort(key=lambda t: (t[2],) + tuple(sk(t[3])))
     taken: list[tuple[str, dict]] = []
     seen_ids: set = set()
-    used = {k: 0 for k, _, _ in plans}
-    for k, it in cand:
+    used = {nm: 0 for nm in names_l}
+    for nm, kd, sg, it in cand:
         if len(taken) >= limit:
             break
-        used[k] += 1
-        if it.get("id") in seen_ids:
+        used[nm] += 1
+        if (it.get("id"), kd) in seen_ids:
             continue
-        seen_ids.add(it.get("id"))
-        taken.append((k, it))
-    _CURSORS[f"{qkey}|{offset + len(taken)}"] = (time.time(), {k: cur.get(k, 0) + used[k] for k in used})
+        seen_ids.add((it.get("id"), kd))
+        taken.append((kd, it))
+    _CURSORS[f"{qkey}|{offset + len(taken)}"] = (time.time(), {nm: cur.get(nm, 0) + used[nm] for nm in used})
     while len(_CURSORS) > _CURSOR_MAX:
         _CURSORS.pop(next(iter(_CURSORS)))
     page_results = [_map_tmdb(it, k) for k, it in taken]

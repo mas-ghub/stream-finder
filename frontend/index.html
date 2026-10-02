@@ -335,7 +335,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.96';
+const APP_VERSION = '1.97';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, total:0, loadingMore:false, checkedAt:null };
@@ -1065,6 +1065,7 @@ function render(spinner){
       <button id="chanBtn" class="chip px-2.5 py-1.5 rounded-lg text-xs ${myCh.length?'seld':''}">${!subs.length?'Add your services ⚙️': myServicesOn?`My ${subs.length} service${subs.length>1?'s':''}`:`On ${myCh.length} service${myCh.length>1?'s':''}`}</button>
       <select id="ymin" title="From year" class="field border border-line rounded-lg px-2 py-1.5 text-xs">${yearOpts(state.yearMin,'From')}</select>
       <select id="ymax" title="To year" class="field border border-line rounded-lg px-2 py-1.5 text-xs">${yearOpts(state.yearMax,'To')}</select>
+      <select id="minRating" title="Minimum rating" class="field border border-line rounded-lg px-2 py-1.5 text-xs">${[[0,'Rating: any'],[6,'60%+'],[7,'70%+'],[8,'80%+'],[9,'90%+']].map(([v,l])=>`<option value="${v}" ${(+state.minRating||0)===v?'selected':''}>${l}</option>`).join('')}</select>
       ${state.rtOn?`<label class="flex items-center gap-1.5 text-xs cursor-pointer select-none"><input type="checkbox" id="minRt" ${state.minRt?'checked':''} class="accent-red-500 w-3.5 h-3.5"/> <span class="${state.minRt?'text-red-400 font-semibold':'text-onsub'}">🍅 rated</span></label>`:''}
       <label class="flex items-center gap-1.5 text-xs cursor-pointer select-none"><input type="checkbox" id="streamOnly" ${state.streamOnly?'checked':''} class="accent-green-500 w-3.5 h-3.5"/> <span class="${state.streamOnly?'text-green-400 font-semibold':'text-onsub'}">I can stream</span></label>
       <label class="flex items-center gap-1.5 text-xs cursor-pointer select-none" title="Only titles you can watch for nothing extra — included in a service you have, or on a free service. Excludes rent/buy (Sky Store, Apple TV Store, Prime pay-movies)."><input type="checkbox" id="freeOnly" ${state.freeOnly?'checked':''} class="accent-cyan-400 w-3.5 h-3.5"/> <span class="${state.freeOnly?'text-cyan-300 font-semibold':'text-onsub'}">Free only</span></label>
@@ -1141,6 +1142,7 @@ function render(spinner){
   $('#clear').addEventListener('click',()=>{ state={...state,q:'',moods:[],channels:[],yearMin:'',yearMax:'',minRating:0,minRt:0,sort:'relevance',streamOnly:false,freeOnly:false,englishOnly:false}; state.limit=100; setLimit(100); setChannels(['netflix']); myServicesOn=false; state.channels=['netflix']; render(false); doSearch(); });
   $('#ymin')?.addEventListener('change',e=>{state.yearMin=e.target.value;doSearch();});
   $('#ymax')?.addEventListener('change',e=>{state.yearMax=e.target.value;doSearch();});
+  $('#minRating')?.addEventListener('change',e=>{state.minRating=parseFloat(e.target.value)||0;doSearch();});
   // The server returns every page in the chosen order across the WHOLE result set, so a
   // sort change refetches from page 1 (cached per sort) instead of re-sorting what's loaded.
   $('#sort')?.addEventListener('change',e=>{state.sort=e.target.value;doSearch();});
