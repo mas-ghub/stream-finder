@@ -647,6 +647,10 @@ async def _tmdb_discover(kind: str, genres: list[str], year_min: int | None = No
         # build the result set — only the displayed cards need their chips attached.
         base["with_watch_provider"] = "|".join(str(int(i)) for i in prov_ids)
         base["watch_region"] = "GB"
+        # Popular first: a service browse is "what's on Netflix in this mood", and
+        # vote_average ordering led with obscure high-rated international titles.
+        # The client can still re-sort locally (Top rated / RT / newest…).
+        base["sort_by"] = "popularity.desc"
     if year_min:
         base[f"{dkey}.gte"] = f"{int(year_min)}-01-01"
     if year_max:
@@ -1483,6 +1487,14 @@ async def search(
     total = len(display_pool)
     # Apply the "load more" offset: serve the next batch of the display pool.
     filtered = display_pool[offset:offset + limit] if (paging and limit > 0) else display_pool
+    # Put the picked genres FIRST on every card: TMDB tags many titles with several
+    # genres ("La Leyenda…" is Horror fourth, after Animation/Comedy/Family), so a
+    # Horror browse otherwise shows cards that read "Animation, Comedy…" and look
+    # like the filter leaked.
+    wanted = {g.lower() for g in list(q.genres) + (genres_for_mood(q.mood) if q.mood else [])}
+    if wanted:
+        for r in filtered:
+            r.genres.sort(key=lambda g: g.lower() not in wanted)
     if pid:
         _progress(pid, phase="finishing", done=0, total=len(filtered))
     # Enrich only the page the user sees (RT was just attached to the whole pool).
