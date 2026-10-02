@@ -2,69 +2,62 @@
 
 Working notes so we can pick up where we left off. Not user-facing (that's README.md).
 
-## ⭐ CURRENT STATE — READ THIS FIRST (2026-10-02, v1.84 / sw shell-v56)
+## ⭐ CURRENT STATE — READ THIS FIRST (2026-10-02 evening, v1.99 / sw shell-v71)
 
-**What changed today (the short version):** service filtering moved from brute-force per-title
-scans ("Checking where it streams… N/998" — the cause of every "couldn't reach the results
-server") to TMDB server-side filtering + small paged requests. Browses are now correct
-(verified 100% the picked service), fast (~10-40s cold), and deep via paging.
+**What changed today (short version):** service browses now PAGE STRAIGHT THROUGH TMDB (no 240
+pool). Netflix = the whole catalogue (~9,270), fast (2-5s/page on Render), sorted server-side.
 
-**Architecture right now:**
-- Service browses add `with_watch_providers=<ids>&watch_region=GB` to every TMDB discover
-  query. **PLURAL — `with_watch_provider` (singular) is SILENTLY IGNORED by TMDB.** That one
-  letter caused a full day of "it's showing other services" bugs. Ids come from
-  `PROVIDER_IDS` / `provider_ids_for()` in `backend/app/channels.py`. Channel 4 = TMDB id 103;
-  **Channel 5 is not tracked by TMDB at all** (never appears in any title's platforms).
-  The pool returned IS the answer set — the per-title scan only attaches chips to displayed
-  cards. Mood "Sport" works through this too (keyword 6075; TMDB has no Sports genre).
-- Paging: the client sends `limit` = page size (60, or the Max-results value when smaller)
-  and `offset`; the backend returns `count` + `total` (the whole result-set size). The app's
-  "Load more" reveals fetched-but-hidden cards first, then fetches the next offset slice.
-- Pool caps (DO NOT RAISE — page 1 pays the whole discover, and a 500 pool made Render's
-  instance die at 124s, stranding the user at 60 cards): prefiltered **240**,
-  scan path **2 × `SF_MAX_PROVIDERS`** (default 200). RT scrape: opt-in only, capped 100.
-- **Rotten Tomatoes is OPT-IN**: the scrape runs ONLY when the request carries `rt_on=true`,
-  which the app sends only when that device's ⚙️ Settings have RT enabled. `rt_off` alone is
-  NOT the gate any more. The detail view's `/api/enrich` respects the same flag.
-- Phone cache: one entry per search (key strips `progress_id` AND `offset`), 24h TTL, max 6
-  entries, skips entries >300 KB; page fetches store the accumulated list.
-- Order on service browses is popularity-first (vote_average led with obscure internationals);
-  the picked mood's genres are sorted to the FRONT of each card's chips (TMDB often tags
-  Horror 4th — that read like a filter leak).
+**Architecture right now (`backend/app/main.py`):**
+- `_can_true_page()` → `_browse_page()`: a service browse (no text query) pages through TMDB
+  discover. Falls back to the OLD capped path (≤240 pool) ONLY for: text search, `free_only`,
+  `min_rt`, RT sorts, Sports mixed with real genres. Params: `with_watch_providers` (PLURAL — singular
+  is silently ignored), `watch_region=GB`, genres joined with `|` (OR), `vote_average.gte` for min rating.
+- **Lanes + cursors:** each kind (movie/tv) is a "lane" already in the chosen order; a page = k-way
+  merge of the next `limit`+30 items per lane → exact global order. Rating sorts add a 2nd "low-vote"
+  lane per kind (well-voted ≥200 films / ≥100 TV first, then the rest) so Top rated covers all 9,270.
+  A cursor per (query, offset) is remembered (30 min, 300 entries) + the last 600 served ids (TMDB's
+  tie order is unstable → it repeats titles; the server skips them so each page is a full 60).
+  Response carries `next` = the server's own offset; **the client MUST send `next`, never its card
+  count** (that stalled Load more at ~190). Cold offset (no cursor) is only approximately ordered.
+- Sorts → TMDB `sort_by` (`_TMDB_SORTS`): relevance=popularity, rating/tmdb=vote_average (+floor),
+  votes, newest/oldest=release date, title=original_title (approximate for translated titles).
+- Min-rating dropdown (60/70/80/90%+) → `vote_average.gte` + vote floor. 90%+ on Netflix ≈ 3 titles.
+- `_cancel_on_disconnect`: abandoned searches are cancelled server-side (new search doesn't queue).
+- **Render crash root cause (fixed):** every cache write queued its own full-cache JSON dump on the
+  event loop (0.1 CPU) → health check stalled → process killed. Now ONE save per 60s in a thread.
+- `_POOL_CACHE` (15 min) serves Load more on the OLD capped path as a slice.
+- RT is opt-in (`rt_on=true` only). Pool caps on the old path: 240 prefiltered. Free tier: ~3-6
+  TMDB ops/s, requests must fit ~40s.
 
-**Free-tier reality (Render, 512MB/0.1CPU):** ~3-6 TMDB ops/sec, kills long requests (502 at
-~50-120s, variable), ephemeral disk (cache dies on every restart). EVERY request must fit
-~40s of work. First browse after a quiet period is the cold one.
+**Frontend (`frontend/index.html`):** floating bar "Showing N of M · Load more ▾" (bottom-centre,
+translucent, hides while the real bottom button is on screen) + toast "+60 loaded". Max-results
+dropdown REMOVED (state.limit=0, page=60). Sort change → refetch (server order, no local re-sort).
+A FRESH search clears `allResults` (previous cards were being mixed in). Phone cache: key prefix is
+VERSIONED (`sf_c<APP_VERSION>_`), stores `total` + `next`; old versions' entries are purged on boot;
+Settings has "Clear saved results & reload". No auto-reload on SW update while results are on screen
+(toast instead). Public site never probes LAN/localhost (that triggered the false "blocking local
+network" popup — it was really Render being down); diagnostics post to Render, not the Mac.
 
-**Verify after ANY backend change** — use the user's EXACT request shapes:
-```
-# mood + single service (should be ~60, total 100-240, every platform netflix):
-curl -G "https://stream-finder-api.onrender.com/api/search" \
-  --data kind=any --data limit=60 --data 'genres=Horror' --data channel=netflix \
-  --data fetch_all=true --data where=true --data rt_off=true
-# page 2 must not overlap page 1:
-  ... --data offset=60 ...
-# the user's real default browse is the 11-service household lens (netflix disney apple sky
-# prime paramount hulu bbc itvx channel4 channel5 as repeated --data channel=...) with
-# limit=60 — THAT is the request that used to 502. Test it, not just netflix-only.
-```
-NEVER test with POST (the route is GET — a missing `curl -G` returns a misleading 405).
+**Ops:** I (Claude) can deploy Render from the CLI: `render deploys create srv-dart93u0tbcc73cvb9d0
+--commit <sha> --confirm --wait` and read logs `render logs -r srv-dart93u0tbcc73cvb9d0 -o text
+--confirm` (CLI is logged in, workspace set). Ask the user before deploying. Pages auto-deploys on push.
+Keep-alive = `.github/workflows/keepalive.yml`: one run lives ~5h50m and pings /api/meta at RANDOM
+5-13 min gaps (hourly cron + concurrency group). NOT yet confirmed it keeps Render awake over hours —
+check the run log. Mac keep-alive (launchd sf-keepalive.sh, 20 min) is a separate leftover.
+Verify after ANY backend change with the live curl recipes (use `curl -G`; household lens = 11
+`--data channel=…` args; in zsh use an array, not a string var).
 
-**Deploy wiring:** every push to `main` auto-deploys the frontend to GitHub Pages (verify
-APP_VERSION at mas-ghub.github.io/stream-finder). The RENDER BACKEND DOES NOT AUTO-DEPLOY
-reliably — the user must manually "Redeploy latest" in the Render dashboard after every
-backend change. The Mac backend (launchd `com.masparrow.stream-finder.lan`, :8443, venv in
-backend/.venv) always runs the working tree — restart it with
-`launchctl kickstart -k gui/$(id -u)/com.masparrow.stream-finder.lan`.
-Do NOT run test.sh (it pkill-kills the launchd server).
+**NEXT (user-approved, NOT started): "you may also like…"** — in the detail popup, a row of
+recommended titles; clicking one opens ITS detail (same enrich flow, by tmdb_id). Plan: TMDB
+`/movie/{id}/recommendations` (+`/similar` fallback) and `/tv/{id}/recommendations` — free, already
+covered by the key; add to `/api/enrich` (or a light `/api/similar`), map with `_map_tmdb`, attach
+provider chips so it can mark/prefer titles on the user's services; frontend: horizontal poster strip
+in the detail view, tap → open that title (keep a back stack). Decide: only show ones on the user's
+services? (suggest: show all, badge the ones they can stream).
 
-**Known TMDB facts:** no Sports genre (use keyword 6075 — works with the plural provider
-filter); no Horror/Sci-Fi-etc TV genre for Horror (Horror mood = films only, ~120 not 240);
-`total_results` caps its display at 20001; comma in `with_genres` = AND, pipe = OR.
-
-**Next feature (user-approved, NOT started):** "you may also like…" recommendations.
-**Known accepted limits:** browse depth ~240 per mood on the free tier (SF_MAX_PROVIDERS /
-pool caps raise it on a paid host); Channel 5 contributes no titles (TMDB doesn't track it).
+**Known limits:** TMDB caps discover at 10,000/kind (household lens shows 20,000); title sort is by
+original title; Channel 5 isn't tracked by TMDB; text search / Free only / min RT / RT sorts are still
+capped at ≤240.
 
 ---
 
