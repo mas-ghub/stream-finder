@@ -1262,6 +1262,92 @@ async def meta():
         ],
     }
 
+# The fully filtered + ranked result set for a search, kept briefly so "Load more" (offset>0)
+# is just a slice of it. Without this every page re-ran the whole TMDB discover (the
+# expensive part) and the free instance died on page 2.
+_POOL_CACHE: dict[str, tuple[float, list]] = {}
+_POOL_TTL = 15 * 60
+_POOL_MAX = 8
+
+
+def _pool_key(q) -> str:
+    return json.dumps(q.model_dump(exclude={"offset", "limit"}), sort_keys=True, default=str)
+
+
+async def _serve_page(q, ordered: list, pid: str | None) -> dict:
+    """Slice one page (offset..offset+limit) out of the ranked pool and attach chips/cast."""
+    limit = max(0, q.limit) if q.limit else 0
+    limit = min(limit, settings.max_results)
+    offset = max(0, q.offset)
+    need_providers = bool(q.channels) or q.stream_only or q.free_only or q.where
+    display_pool = ordered
+    # Total the client *can* page through (the display pool size) — used to decide
+    # whether a "load more" button should show. The returned `count` is the size of
+    # THIS batch; the client tracks how many it has loaded and compares to `total`.
+    total = len(display_pool)
+    # Apply the "load more" offset: serve the next batch of the display pool.
+    filtered = display_pool[offset:offset + limit] if limit > 0 else display_pool
+    # Put the picked genres FIRST on every card: TMDB tags many titles with several
+    # genres ("La Leyenda…" is Horror fourth, after Animation/Comedy/Family), so a
+    # Horror browse otherwise shows cards that read "Animation, Comedy…" and look
+    # like the filter leaked.
+    wanted = {g.lower() for g in list(q.genres) + (genres_for_mood(q.mood) if q.mood else [])}
+    if wanted:
+        for r in filtered:
+            r.genres.sort(key=lambda g: g.lower() not in wanted)
+    if pid:
+        _progress(pid, phase="finishing", done=0, total=len(filtered))
+    # Enrich only the page the user sees (RT was just attached to the whole pool).
+    if settings.tmdb_enabled and (tmdb_key() or tmdb_v4_key()):
+        # results=filtered exposes a growing snapshot (partial_results) on the
+        # progress channel, so the client can render each card as its cast and
+        # where-to-watch data land — no need to wait for the whole batch.
+        if len(filtered) > 80 or offset > 0:
+            # Big page (or a "Load more" page: halve its TMDB calls on the slow free host) (an "All" browse): the grid never shows cast — the detail view
+            # refetches it on tap via /api/enrich — so fetching full credits for every
+            # card here is the single biggest cost of a big browse for data nobody
+            # sees. Cards already streamed in during the provider scan above; just
+            # fill any provider gaps (the channel path pre-attached them, so this is
+            # usually a no-op) and let the detail view handle cast on demand.
+            await _gather_bounded(
+                [_attach_providers(r) for r in filtered if need_providers and not (r.platforms or [])],
+                16, progress_key=pid, progress_phase="finishing", progress_total=len(filtered), results=filtered)
+        else:
+            await _gather_bounded(
+                [asyncio.gather(*([_attach_providers(r)] if need_providers else []) + [_attach_cast(r)])
+                 for r in filtered],
+                16, progress_key=pid, progress_phase="finishing", progress_total=len(filtered), results=filtered)
+    # "Free" (the user's meaning) = included in a service you already pay for, i.e. it
+    # costs nothing *extra*. Kept when the title is on one of the user's ticked
+    # subscriptions (any channel type — a free-to-air service you "have" also counts)
+    # OR on a genuinely-free service (BBC/ITVX/Ch4/Ch5/Freevee/Pluto/Tubi). Rent/buy
+    # per-title charges (Sky Store, Apple TV Store, Prime pay-movies) do NOT count.
+    # Applied server-side (mirrors the client's household) so the returned page is
+    # exactly the "no extra charge" set, even for services you have but aren't
+    # filtering by.
+    if q.free_only:
+        hh = set(q.household)
+        def _no_extra_charge(plats: list[dict]) -> bool:
+            for p in plats or []:
+                cid = p.get("channel")
+                if cid is None:
+                    continue
+                # Genuinely-free service (BBC/ITVX/Ch4/Ch5/Freevee/Pluto/Tubi) = no cost
+                # at all, always counts.
+                if cid in FREE_CHANNELS:
+                    return True
+                # A service you have counts ONLY as a flatrate (subscription) entry —
+                # being "on Apple/Prime/Sky" via rent/buy means you'd pay extra, which
+                # is exactly what "free" must exclude.
+                if p.get("type") == "flatrate" and cid in hh:
+                    return True
+            return False
+        filtered = [r for r in filtered if _no_extra_charge(r.platforms)]
+    if pid:
+        PROGRESS.pop(pid, None)  # search done; let the frontend's poll finish
+    return {"results": [r.to_dict() for r in filtered], "count": len(filtered), "total": total}
+
+
 
 def _cancel_on_disconnect(fn):
     """Stop a request's work the moment the client hangs up.
@@ -1343,6 +1429,11 @@ async def search(
             q.sort = "relevance"
     tmdb_on = settings.tmdb_enabled and bool(tmdb_key())
     pid = progress_id  # key for the live progress the frontend polls
+    _pool_ck = _pool_key(q)
+    if q.offset > 0:
+        _hit = _POOL_CACHE.get(_pool_ck)
+        if _hit and time.time() - _hit[0] < _POOL_TTL:
+            return await _serve_page(q, _hit[1], pid)   # "Load more": a slice of the cached pool
     if pid:
         _progress(pid, phase="starting")
     results: list[Result] = []
@@ -1552,73 +1643,10 @@ async def search(
     # client how many titles exist so "Load more" can keep fetching pages. (Older
     # clients that send their whole pool size as limit with no offset simply get the
     # first `limit` — same behaviour as before.)
-    display_pool = ordered
-    # Total the client *can* page through (the display pool size) — used to decide
-    # whether a "load more" button should show. The returned `count` is the size of
-    # THIS batch; the client tracks how many it has loaded and compares to `total`.
-    total = len(display_pool)
-    # Apply the "load more" offset: serve the next batch of the display pool.
-    filtered = display_pool[offset:offset + limit] if limit > 0 else display_pool
-    # Put the picked genres FIRST on every card: TMDB tags many titles with several
-    # genres ("La Leyenda…" is Horror fourth, after Animation/Comedy/Family), so a
-    # Horror browse otherwise shows cards that read "Animation, Comedy…" and look
-    # like the filter leaked.
-    wanted = {g.lower() for g in list(q.genres) + (genres_for_mood(q.mood) if q.mood else [])}
-    if wanted:
-        for r in filtered:
-            r.genres.sort(key=lambda g: g.lower() not in wanted)
-    if pid:
-        _progress(pid, phase="finishing", done=0, total=len(filtered))
-    # Enrich only the page the user sees (RT was just attached to the whole pool).
-    need_providers = bool(q.channels) or q.stream_only or q.free_only or q.where
-    if settings.tmdb_enabled and (tmdb_key() or tmdb_v4_key()):
-        # results=filtered exposes a growing snapshot (partial_results) on the
-        # progress channel, so the client can render each card as its cast and
-        # where-to-watch data land — no need to wait for the whole batch.
-        if len(filtered) > 80:
-            # Big page (an "All" browse): the grid never shows cast — the detail view
-            # refetches it on tap via /api/enrich — so fetching full credits for every
-            # card here is the single biggest cost of a big browse for data nobody
-            # sees. Cards already streamed in during the provider scan above; just
-            # fill any provider gaps (the channel path pre-attached them, so this is
-            # usually a no-op) and let the detail view handle cast on demand.
-            await _gather_bounded(
-                [_attach_providers(r) for r in filtered if need_providers and not (r.platforms or [])],
-                16, progress_key=pid, progress_phase="finishing", progress_total=len(filtered), results=filtered)
-        else:
-            await _gather_bounded(
-                [asyncio.gather(*([_attach_providers(r)] if need_providers else []) + [_attach_cast(r)])
-                 for r in filtered],
-                16, progress_key=pid, progress_phase="finishing", progress_total=len(filtered), results=filtered)
-    # "Free" (the user's meaning) = included in a service you already pay for, i.e. it
-    # costs nothing *extra*. Kept when the title is on one of the user's ticked
-    # subscriptions (any channel type — a free-to-air service you "have" also counts)
-    # OR on a genuinely-free service (BBC/ITVX/Ch4/Ch5/Freevee/Pluto/Tubi). Rent/buy
-    # per-title charges (Sky Store, Apple TV Store, Prime pay-movies) do NOT count.
-    # Applied server-side (mirrors the client's household) so the returned page is
-    # exactly the "no extra charge" set, even for services you have but aren't
-    # filtering by.
-    if q.free_only:
-        hh = set(q.household)
-        def _no_extra_charge(plats: list[dict]) -> bool:
-            for p in plats or []:
-                cid = p.get("channel")
-                if cid is None:
-                    continue
-                # Genuinely-free service (BBC/ITVX/Ch4/Ch5/Freevee/Pluto/Tubi) = no cost
-                # at all, always counts.
-                if cid in FREE_CHANNELS:
-                    return True
-                # A service you have counts ONLY as a flatrate (subscription) entry —
-                # being "on Apple/Prime/Sky" via rent/buy means you'd pay extra, which
-                # is exactly what "free" must exclude.
-                if p.get("type") == "flatrate" and cid in hh:
-                    return True
-            return False
-        filtered = [r for r in filtered if _no_extra_charge(r.platforms)]
-    if pid:
-        PROGRESS.pop(pid, None)  # search done; let the frontend's poll finish
-    return {"results": [r.to_dict() for r in filtered], "count": len(filtered), "total": total}
+    _POOL_CACHE[_pool_ck] = (time.time(), ordered)
+    while len(_POOL_CACHE) > _POOL_MAX:
+        _POOL_CACHE.pop(next(iter(_POOL_CACHE)))
+    return await _serve_page(q, ordered, pid)
 
 
 @app.post("/api/enrich")
