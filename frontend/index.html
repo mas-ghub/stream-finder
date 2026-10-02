@@ -115,7 +115,7 @@ tailwind.config = {
 <div id="sf_topbar" aria-hidden="true"></div>
 <div id="app" class="min-h-full max-w-[1400px] mx-auto px-4 md:px-8" style="padding-bottom:calc(env(safe-area-inset-bottom,0px) + 6rem)"></div>
 <div id="modal"></div>
-<div id="toast" class="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] hidden"></div>
+<div id="toast" class="fixed bottom-20 left-1/2 -translate-x-1/2 z-[60] hidden"></div>
 
 <script>
 // Global error trap — turns ugly console errors (including SyntaxError, which
@@ -335,7 +335,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.88';
+const APP_VERSION = '1.89';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, total:0, loadingMore:false, checkedAt:null };
@@ -955,9 +955,18 @@ function updateMoreBar(intShown, intTotal, blnMore, blnBusy){
     document.body.appendChild(el);
   }
   if(!blnMore && !blnBusy){ el.classList.add('hidden'); return; }
-  el.classList.remove('hidden');
   el.textContent = blnBusy ? `Loading more… (${intShown} of ${intTotal})` : `Showing ${intShown} of ${intTotal} · Load more ▾`;
+  // The bar is for when the real Load more button is OUT of view. When that button is on
+  // screen the bar hides, so the two never sit on top of each other.
+  el.classList.remove('hidden');
+  if(_moreObs){ _moreObs.disconnect(); _moreObs=null; }
+  const btn=document.getElementById('loadMore');
+  if(btn && window.IntersectionObserver){
+    _moreObs=new IntersectionObserver(es=>{ el.classList.toggle('hidden', !!es[0] && es[0].isIntersecting); });
+    _moreObs.observe(btn);
+  }
 }
+var _moreObs=null;
 
 function render(spinner){
   const tmdbOn = META.sources.find(s=>s.key==='tmdb')?.configured || META._tmdbKey;
