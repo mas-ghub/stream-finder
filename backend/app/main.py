@@ -1571,7 +1571,10 @@ async def _browse_page(q: Query, prov_ids: list[int], pid: str | None) -> dict:
                           results=page_results, only_provided=True, snap_every=10)
     if pid:
         PROGRESS.pop(pid, None)
-    return {"results": [r.to_dict() for r in page_results], "count": len(page_results), "total": grand}
+    # `next` = where the following page starts in the server's own ordering. The client must
+    # use this (not its own card count, which loses cards to de-duplication).
+    return {"results": [r.to_dict() for r in page_results], "count": len(page_results), "total": grand,
+            "next": offset + len(taken)}
 
 
 def _cancel_on_disconnect(fn):

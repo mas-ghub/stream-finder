@@ -335,7 +335,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.95';
+const APP_VERSION = '1.96';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, total:0, loadingMore:false, checkedAt:null };
@@ -460,8 +460,8 @@ function pruneCache(){
   ks.sort((a,b)=>((readCache(a)||{})._t||0)-((readCache(b)||{})._t||0));  // oldest first
   ks.slice(0, ks.length-CACHE_MAX).forEach(k=>{ try{ localStorage.removeItem(k); }catch(e){} });
 }
-function writeCache(key, results, total){
-  const blob = JSON.stringify({ _t: Date.now(), results: results || [], total: total || (results||[]).length });
+function writeCache(key, results, total, next){
+  const blob = JSON.stringify({ _t: Date.now(), results: results || [], total: total || (results||[]).length, next: next || (results||[]).length });
   if(blob.length > CACHE_MAX_BYTES) return;   // too big to store safely — skip
   try{ localStorage.setItem(key, blob); pruneCache(); }
   catch(e){                                   // quota error → drop the oldest entry, retry once
@@ -621,6 +621,7 @@ async function doSearch(opts){
       if(mySeq !== searchSeq) return;      // a newer search started meanwhile
       allResults = hit.results || [];
       state.total = hit.total || allResults.length;   // so Load more still knows the server has more pages
+      state.nextOffset = hit.next || allResults.length;
       state.checkedAt = hit._t;
       window.__backendDown = false;
       doSearch._retried = false;
@@ -689,13 +690,16 @@ async function doSearch(opts){
       allResults=[...(d.results||[]), ...prev.filter(r=>!seen.has(key(r)))];
     }
     state.total = d.total || allResults.length;
+    // Where the next page starts in the SERVER's ordering (the client's own card count drifts
+    // once duplicates are dropped, which made Load more re-request cards it already had).
+    state.nextOffset = (typeof d.next === 'number') ? d.next : (pageOffset + (d.count || 0)) || allResults.length;
     state.loaded = allResults.length;   // everything fetched is visible; Load more grows it
     // This backend worked — remember it so the next visit just works (no setup).
     if(API){ try{ localStorage.setItem('sf_backend', API); }catch(e){} }
     // Store the response on the device (freshness-stamped) so repeating this exact search
     // is instant. Cache the server's own result list, not the merged `allResults` (which can
     // carry a previous search's leftovers) — page fetches store the accumulated list.
-    writeCache(ckey, pageOffset ? (allResults || []) : (d.results || []), state.total);
+    writeCache(ckey, pageOffset ? (allResults || []) : (d.results || []), state.total, state.nextOffset);
     state.checkedAt = Date.now();
   }catch(e){
     if(mySeq!==searchSeq){ stopProgress=true; return; }   // superseded by a newer search
@@ -926,10 +930,11 @@ function loadMoreNow(){
   }
   const cap = state.limit || Infinity;                       // Max results (0 = All)
   const total = Math.min(state.total || 0, cap);
-  if(!pool.length || pool.length >= total || state.loadingMore) return;
+  const intNext = state.nextOffset || pool.length;       // the server's own position, not our card count
+  if(!pool.length || intNext >= total || state.loadingMore) return;
   const intBefore = pool.length;
   state.loadingMore = true; render(false);
-  Promise.resolve(doSearch({offset: pool.length})).finally(()=>{
+  Promise.resolve(doSearch({offset: intNext})).finally(()=>{
     state.loadingMore=false;
     const intAdded = (allResults||[]).length - intBefore;
     if(intAdded>0) showToast(`+${intAdded} loaded · ${(allResults||[]).length.toLocaleString()} of ${total.toLocaleString()}`);
@@ -1010,7 +1015,7 @@ function render(spinner){
    shown = pool.slice(0, nShown);
    // There's more to reveal when the pool has unshown items OR the server still has
    // pages we haven't fetched (state.total = the server-side result count).
-   const hasMore = pool.length > nShown || (state.total||0) > pool.length;
+   const hasMore = pool.length > nShown || (state.total||0) > Math.max(pool.length, state.nextOffset||0);
    const app=$('#app');
   // The whole screen is rebuilt on every render; keep the search box focused (and the
   // caret) if the user is in it, otherwise the keyboard closes mid-typing / when results land.
