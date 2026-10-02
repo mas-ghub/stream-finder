@@ -142,12 +142,14 @@ def _persist_save() -> None:
     """Snapshot the long-lived caches to disk (best-effort, never fatal)."""
     try:
         now = time.time()
+        # list(...) snapshots are atomic under the GIL, so this is safe to run in a
+        # worker thread while the event loop keeps mutating the caches.
         blob = {
-            "prov": {_key_str(k): [ts, v] for k, (ts, v) in _PROV_CACHE.items()
+            "prov": {_key_str(k): [ts, v] for k, (ts, v) in list(_PROV_CACHE.items())
                      if v is not None and now - ts < _PROV_TTL},
-            "cast": {_key_str(k): [ts, v] for k, (ts, v) in _CAST_CACHE.items()
+            "cast": {_key_str(k): [ts, v] for k, (ts, v) in list(_CAST_CACHE.items())
                      if now - ts < _CAST_TTL},
-            "rt": {_key_str(k): e for k, e in _RT_CACHE.items()
+            "rt": {_key_str(k): e for k, e in list(_RT_CACHE.items())
                    if e.get("_t", 0) > now and e.get("_t", 0) - now < _PERSIST_TTL["rt"]},
         }
         with open(_PERSIST_PATH, "w") as f:
@@ -188,13 +190,32 @@ def _persist_load() -> None:
 _persist_load()
 
 
+_save_pending = False
+
+
+def _kick_save() -> None:
+    """Run the disk snapshot in a worker thread so it can never block the event loop."""
+    global _save_pending
+    _save_pending = False
+    try:
+        asyncio.get_event_loop().run_in_executor(None, _persist_save)
+    except RuntimeError:
+        pass
+
+
 def _mark_cache_dirty() -> None:
-    """Call after mutating a persisted cache; debounced save via a background task."""
+    """Call after mutating a persisted cache. One save is queued at a time (every call used
+    to queue its own full-cache JSON dump on the event loop — dozens per page on the 0.1-CPU
+    free instance, which stalled the health check and got the process killed)."""
+    global _save_pending
+    if _save_pending:
+        return
     try:
         t = asyncio.get_event_loop()
     except RuntimeError:
         return
-    t.call_later(2.0, _persist_save)  # batch writes: save 2s after the last change
+    _save_pending = True
+    t.call_later(60.0, _kick_save)
 
 
 # Per-request TMDB key override (the frontend can pass a key stored in
