@@ -1,54 +1,45 @@
 # Keeps the free-tier Render backend warm so it doesn't fall asleep when idle.
 #
-# Render's free tier sleeps after ~15 min of no traffic and takes 1-2 min to wake.
-# A tiny GET to /api/meta (the same cheap endpoint the PWA calls on boot — it just
-# returns config, no scraping) resets Render's idle timer, so a real user's search
-# lands on an already-awake server instead of a cold one.
+# Render's free tier sleeps after ~15 min with no incoming request and takes 1-2 min
+# to wake. GitHub's own cron is too unreliable for this (scheduled runs were landing
+# 3-7 hours apart), so each run here STAYS ALIVE for ~5h50m and pings /api/meta
+# itself, at a RANDOM 5-13 min gap (no regular pattern, always inside the 15-min
+# window). An hourly cron starts the next run; the concurrency group queues it so
+# two runs never overlap, and it picks up as the previous one finishes.
 #
-# This is a SAFETY NET that runs whether or not the Mac is on. The Mac's own
-# launchd keep-alive (sf-keepalive.sh) already pings while it's booted; this covers
-# the "Mac is off" case. Two keep-alives hitting the same endpoint is harmless —
-# each just resets the idle timer.
-#
-# Interval: a fixed 20-min cron, plus a randomized 0-600s sleep before the ping, so
-# the pings don't land on a perfect regular beat (a metronome pattern is what looks
-# like a bot and risks the free tier being flagged). 20 min sits just inside
-# Render's sleep window, so the service stays awake without hammering it.
-#
-# NOTE: GitHub Pages (the static site) cannot do this — it can't run a timer.
-# Only GitHub Actions (always-on infra) can. That's why this lives here.
+# NOTE: GitHub Pages (the static site) can't run a timer. Only Actions can.
 name: Keep-alive (Render backend)
 
 on:
   schedule:
-    # Every 20 minutes. (GitHub's schedule runs on a shared pool and may batch
-    # under load, but "every ~20 min" is all we need to beat the 15-min sleep.)
-    - cron: "*/20 * * * *"
-  # Manual trigger (e.g. right after a deploy, to warm it before someone uses it).
+    - cron: "7 * * * *"
+  # Manual trigger (e.g. right after a deploy, to start the loop immediately).
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: render-keepalive
+  cancel-in-progress: false
+
 jobs:
   ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 355
     steps:
-      - name: Ping the backend (with jitter)
-        # $RANDOM gives 0-32767; mod 600 → a 0-2 min random delay so the pings
-        # aren't on a fixed metronome. Then ping with a few retries (a cold start
-        # can take 60-120s; the first ping is usually what wakes it).
+      - name: Ping the backend at random gaps for ~5h50m
         run: |
-          echo "sleeping $((RANDOM % 120))s (randomized) before ping"
-          sleep $((RANDOM % 120))
-          for i in 1 2 3; do
-            if curl -sf --max-time 90 -o /dev/null "https://stream-finder-api.onrender.com/api/meta"; then
-              echo "backend answered on attempt $i"
-              exit 0
-            fi
-            echo "attempt $i failed, retrying in 15s…"
-            sleep 15
+          URL="https://stream-finder-api.onrender.com/api/meta"
+          END=$((SECONDS + 21000))
+          while [ $SECONDS -lt $END ]; do
+            ok=0
+            for i in 1 2 3; do
+              if curl -sf --max-time 90 -o /dev/null "$URL"; then ok=1; break; fi
+              sleep 15
+            done
+            [ $ok = 1 ] && echo "$(date -u +%T) ping ok" || echo "$(date -u +%T) ping FAILED"
+            GAP=$((300 + RANDOM % 481))   # 300-780s = 5-13 min
+            echo "next ping in ${GAP}s"
+            sleep $GAP
           done
-          echo "backend did not answer after 3 attempts" >&2
-          exit 1
