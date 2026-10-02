@@ -335,7 +335,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.93';
+const APP_VERSION = '1.94';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, total:0, loadingMore:false, checkedAt:null };
@@ -1498,6 +1498,12 @@ async function openSettings(){
         nw.addEventListener('statechange', ()=>{
           if(nw.state === 'installed' && navigator.serviceWorker.controller
              && !sessionStorage.getItem('sf_sw_reload')){
+            // Never yank the page away mid-browse (a reload resets the list to page 1):
+            // if the user has loaded results, just tell them; the update applies next open.
+            if((allResults||[]).length > 0 && !(window.__backendDown)){
+              try{ showToast('New version ready — it applies next time you open the app'); }catch(e){}
+              return;
+            }
             try{ sessionStorage.setItem('sf_sw_reload','1'); setTimeout(()=>location.reload(), 400); }catch(e){}
           }
         });
