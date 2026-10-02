@@ -1382,7 +1382,9 @@ async def _serve_page(q, ordered: list, pid: str | None) -> dict:
 _TOTALS_CACHE: dict[str, tuple[float, int]] = {}
 _TOTALS_TTL = 15 * 60
 _TMDB_MAX_PAGE = 500          # TMDB refuses pages beyond this (10,000 results)
-_CURSORS: dict[str, tuple[float, dict[str, int]]] = {}
+_CURSORS: dict[str, tuple[float, dict[str, int], list]] = {}   # (time, lane cursors, recently served ids)
+_RECENT_IDS = 600      # remembered per chain so TMDB's unstable tie order can't re-serve a title
+_WINDOW_EXTRA = 30     # fetch a few spare items per lane so skipped repeats don't leave a short page
 _CURSOR_TTL = 30 * 60
 _CURSOR_MAX = 300
 
@@ -1534,12 +1536,14 @@ async def _browse_page(q: Query, prov_ids: list[int], pid: str | None) -> dict:
     qkey = _pool_key(q)
     names_l = [nm for nm, *_ in lanes]
     cur = None
+    recent: list = []
     if offset == 0:
         cur = {nm: 0 for nm in names_l}
     else:
         hit = _CURSORS.get(f"{qkey}|{offset}")
         if hit and time.time() - hit[0] < _CURSOR_TTL:
             cur = dict(hit[1])
+            recent = list(hit[2])
     if cur is None:
         cur = {nm: 0 for nm in names_l}
         left = offset
@@ -1558,7 +1562,7 @@ async def _browse_page(q: Query, prov_ids: list[int], pid: str | None) -> dict:
     async def window_of(name, kind, path, prm, seg):
         if seg == 1 and seg0_left > limit:
             return []          # the well-voted lanes still fill this page: don't touch the rest yet
-        a, b = cur.get(name, 0), min(cur.get(name, 0) + limit, totals[name])
+        a, b = cur.get(name, 0), min(cur.get(name, 0) + limit + _WINDOW_EXTRA, totals[name])
         if b <= a:
             return []
         pnums = [n for n in range(a // 20 + 1, (b - 1) // 20 + 2) if n <= _TMDB_MAX_PAGE]
@@ -1576,7 +1580,7 @@ async def _browse_page(q: Query, prov_ids: list[int], pid: str | None) -> dict:
     cand = [x for w in wins for x in w]
     cand.sort(key=lambda t: (t[2],) + tuple(sk(t[3])))
     taken: list[tuple[str, dict]] = []
-    seen_ids: set = set()
+    seen_ids: set = {tuple(x) for x in recent}
     used = {nm: 0 for nm in names_l}
     for nm, kd, sg, it in cand:
         if len(taken) >= limit:
@@ -1586,7 +1590,8 @@ async def _browse_page(q: Query, prov_ids: list[int], pid: str | None) -> dict:
             continue
         seen_ids.add((it.get("id"), kd))
         taken.append((kd, it))
-    _CURSORS[f"{qkey}|{offset + len(taken)}"] = (time.time(), {nm: cur.get(nm, 0) + used[nm] for nm in used})
+    recent = (recent + [[it.get("id"), kd] for kd, it in taken])[-_RECENT_IDS:]
+    _CURSORS[f"{qkey}|{offset + len(taken)}"] = (time.time(), {nm: cur.get(nm, 0) + used[nm] for nm in used}, recent)
     while len(_CURSORS) > _CURSOR_MAX:
         _CURSORS.pop(next(iter(_CURSORS)))
     page_results = [_map_tmdb(it, k) for k, it in taken]
