@@ -335,7 +335,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.85';
+const APP_VERSION = '1.86';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, total:0, loadingMore:false, checkedAt:null };
@@ -1046,14 +1046,6 @@ function render(spinner){
       <button id="chanBtn" class="chip px-2.5 py-1.5 rounded-lg text-xs ${myCh.length?'seld':''}">${!subs.length?'Add your services ⚙️': myServicesOn?`My ${subs.length} service${subs.length>1?'s':''}`:`On ${myCh.length} service${myCh.length>1?'s':''}`}</button>
       <select id="ymin" title="From year" class="field border border-line rounded-lg px-2 py-1.5 text-xs">${yearOpts(state.yearMin,'From')}</select>
       <select id="ymax" title="To year" class="field border border-line rounded-lg px-2 py-1.5 text-xs">${yearOpts(state.yearMax,'To')}</select>
-       <select id="maxResults" title="Max results" class="field border border-line rounded-lg px-2 py-1.5 text-xs">
-         <option value="100" ${state.limit===100?'selected':''}>100</option>
-         <option value="25" ${state.limit===25?'selected':''}>25</option>
-         <option value="50" ${state.limit===50?'selected':''}>50</option>
-         <option value="200" ${state.limit===200?'selected':''}>200</option>
-         <option value="500" ${state.limit===500?'selected':''}>500</option>
-         <option value="0" ${state.limit===0?'selected':''}>All</option>
-       </select>
       ${state.rtOn?`<label class="flex items-center gap-1.5 text-xs cursor-pointer select-none"><input type="checkbox" id="minRt" ${state.minRt?'checked':''} class="accent-red-500 w-3.5 h-3.5"/> <span class="${state.minRt?'text-red-400 font-semibold':'text-onsub'}">🍅 rated</span></label>`:''}
       <label class="flex items-center gap-1.5 text-xs cursor-pointer select-none"><input type="checkbox" id="streamOnly" ${state.streamOnly?'checked':''} class="accent-green-500 w-3.5 h-3.5"/> <span class="${state.streamOnly?'text-green-400 font-semibold':'text-onsub'}">I can stream</span></label>
       <label class="flex items-center gap-1.5 text-xs cursor-pointer select-none" title="Only titles you can watch for nothing extra — included in a service you have, or on a free service. Excludes rent/buy (Sky Store, Apple TV Store, Prime pay-movies)."><input type="checkbox" id="freeOnly" ${state.freeOnly?'checked':''} class="accent-cyan-400 w-3.5 h-3.5"/> <span class="${state.freeOnly?'text-cyan-300 font-semibold':'text-onsub'}">Free only</span></label>
@@ -1131,8 +1123,6 @@ function render(spinner){
   $('#ymin')?.addEventListener('change',e=>{state.yearMin=e.target.value;doSearch();});
   $('#ymax')?.addEventListener('change',e=>{state.yearMax=e.target.value;doSearch();});
   $('#sort')?.addEventListener('change',e=>{state.sort=e.target.value;render(false);});
-  $('#maxResults')?.addEventListener('change',e=>{state.limit=parseInt(e.target.value); if(isNaN(state.limit)) state.limit=100; setLimit(state.limit); doSearch();});
-  $('#maxResults').value = String(state.limit);
   // "Force refresh": ignore the phone cache and refetch this search from the server now.
   $('#refreshNow')?.addEventListener('click',()=>doSearch({force:true}));
   // "Load more": reveal the next batch of the already-fetched pool (instant, local);
@@ -1433,7 +1423,7 @@ async function openSettings(){
   // ratings" step after the update. (No-op for people who already have it off.)
   try{ if(localStorage.getItem('sf_rt')==='1'){ localStorage.setItem('sf_rt','0'); } }catch(e){}
   state.rtOn = rtOn();  // re-read after the reset above
-  state.limit = getLimit();
+  state.limit = 0;   // no client cap: results arrive 60 at a time via Load more (dropdown removed)
   if(!localStorage.getItem('sf_household')){
     setHousehold(['bbc','itvx','channel4','channel5','sky','apple','disney','paramount','hulu','netflix','prime']);
   }
