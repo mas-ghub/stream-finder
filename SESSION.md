@@ -1079,6 +1079,19 @@ Two problems found by reproducing their exact request:
 Verified locally with the exact 11-channel request: All browse 199 titles HTTP 200;
 Horror + Netflix still 100/100 Netflix.
 
+## v1.84 — real server paging ("Load more" fetches the next page)
+
+The 200-title cap made "All" a dead end. Now `limit` on the wire is a PAGE size (60, or the
+Max-results value when smaller) and `offset` walks the result set: the backend returns
+`total` alongside `count`, and the client's Load more reveals locally-hidden cards first,
+then fetches the next offset slice (60 titles ≈ a small request that always fits the free
+tier). The pool cap for prefiltered browses is back up to 500 — page 1 pays the discover
+cost once and the server's TMDB cache makes later pages cheap. Phone cache: all pages of a
+search share one entry (offset stripped from the key) and store the accumulated list.
+
+Verified: Horror + Netflix page 1 = 60/232, page 2 = 60/232, zero overlap, 100% Netflix.
+
+
 
 
 

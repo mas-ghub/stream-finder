@@ -335,10 +335,10 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.83';
+const APP_VERSION = '1.84';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
-let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, checkedAt:null };
+let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, total:0, loadingMore:false, checkedAt:null };
 // "Load more" reveals more of the already-fetched pool in batches (instant, local)
 // before it asks the backend for the next offset slice. 40 = a fast first paint.
 const LOAD_MORE_STEP = 40;
@@ -441,6 +441,7 @@ const CACHE_MAX_BYTES = 300 * 1024;   // skip a single oversized ("All") page
 function cacheKeyFor(params){
   const q = new URLSearchParams(params);
   q.delete('progress_id');            // unique per search — must not be part of the key
+  q.delete('offset');                 // pages of the same search share one cache entry
   return CACHE_PREFIX + q.toString();
 }
 function readCache(key){
@@ -559,12 +560,14 @@ async function fetchMeta(){
 let searchSeq = 0, searchCtl = null;
 async function doSearch(opts){
   const force = !!(opts && opts.force);   // "Force refresh" bypasses the phone cache
+  const pageOffset = (opts && opts.offset) || 0;  // >0 = "load more" page fetch
   // Latest click wins: cancel any search in flight instead of ignoring the new click.
   const mySeq = ++searchSeq;
   if(searchCtl) try{ searchCtl.abort(); }catch(e){}
   searchCtl = window.AbortController ? new AbortController() : null;
   // Fresh search → start from a small first page; "Load more" grows it from here.
-  state.loaded = Math.min(state.limit || 40, 40);
+  // (Page fetches — offset>0 — keep the running count and just append.)
+  if(!pageOffset) state.loaded = Math.min(state.limit || 40, 40);
   // The "My services" lens: browse the pool of everything on the services you
   // have (all of them by default). A text search or a mood turns the lens off.
   const myCh = lensChannels();
@@ -581,15 +584,13 @@ async function doSearch(opts){
   // Wider pool whenever the user is filtering by their services (browse or mood) so
   // the provider check has enough to keep; a plain text search stays fast.
   if(myCh.length && !state.q) p.set('fetch_all', 'true');
-  // "All" (limit 0) = no local cap: ask the backend for its full pool (1000). A
-  // specific number = fetch at least that many (so local re-sort is exact) and cap
-  // the display to it. When the browse is service-scoped, the backend provider-checks
-  // every title in that pool — so the pool size IS the cost. With a lens on we ask
-  // only for what will be displayed (a 100-card browse provider-checks 100 titles,
-  // not 300) so it stays fast and off Render's free-tier limits; plain text searches
-  // and non-service searches keep the wider pool — there the extra titles cost no
-  // provider calls and give exact local re-sorts.
-  p.set('limit', state.limit===0 ? 1000 : (myCh.length && !state.q ? state.limit : Math.max(state.limit, 300)));
+  // "All" (limit 0) = no local cap. `limit` on the wire is a PAGE size (60): the
+  // backend keeps the whole result set and serves offset..offset+limit slices, and
+  // "Load more" fetches the next slice — so browsing deep never costs one huge
+  // request (which is what the free backend kept choking on).
+  const PAGE = (state.limit && state.limit < 60) ? state.limit : 60;
+  p.set('limit', PAGE);
+  if(pageOffset) p.set('offset', pageOffset);
   // "where=true" asks the backend to return provider data for every result so we
   // can filter/annotate on the client. Widens the pool so filters have enough.
   const where = state.streamOnly || state.freeOnly || myCh.length>0;
@@ -612,7 +613,7 @@ async function doSearch(opts){
   // served from the device instantly — no backend round-trip, so the slow "Checking where
   // it streams…" pass is skipped entirely. "Force refresh" (or the TTL lapsing) refetches.
   const ckey = cacheKeyFor(p);
-  if(!force){
+  if(!force && !pageOffset){
     const hit = readCache(ckey);
     if(hit && (Date.now() - hit._t) < CACHE_TTL){
       if(mySeq !== searchSeq) return;      // a newer search started meanwhile
@@ -660,7 +661,7 @@ async function doSearch(opts){
     }catch(e){/* ignore poll errors */}
     if(!stopProgress) setTimeout(tick, 500);
   };
-  tick();
+  if(!pageOffset) tick();   // page fetches are short — no progress ticker needed
   window.__backendDown=false;
   try{
     let res = await fetch(API+'/api/search?'+p.toString(),{headers:hd, signal: searchCtl ? searchCtl.signal : undefined});
@@ -673,16 +674,25 @@ async function doSearch(opts){
     if(!res.ok) throw new Error('HTTP '+res.status);
     const d = await res.json();
     // Merge, don't replace: the partial stream (streamPartial) may have already
-    // rendered newer per-card data than the server's final snapshot.
+    // rendered newer per-card data than the server's final snapshot. A page fetch
+    // (offset>0) APPENDS to what we already show instead of replacing it.
     const prev=allResults||[];
-    const seen=new Set((d.results||[]).map(r=>r.tmdb_id?'m'+r.kind+r.tmdb_id:r.kind+'|'+r.title));
-    allResults=[...(d.results||[]), ...prev.filter(r=>!seen.has(r.tmdb_id?'m'+r.kind+r.tmdb_id:r.kind+'|'+r.title))];
+    const key=r=>(r.tmdb_id?'m'+r.kind+r.tmdb_id:r.kind+'|'+r.title);
+    if(pageOffset){
+      const seen=new Set(prev.map(key));
+      allResults=[...prev, ...(d.results||[]).filter(r=>!seen.has(key(r)))];
+    }else{
+      const seen=new Set((d.results||[]).map(key));
+      allResults=[...(d.results||[]), ...prev.filter(r=>!seen.has(key(r)))];
+    }
+    state.total = d.total || allResults.length;
+    state.loaded = allResults.length;   // everything fetched is visible; Load more grows it
     // This backend worked — remember it so the next visit just works (no setup).
     if(API){ try{ localStorage.setItem('sf_backend', API); }catch(e){} }
     // Store the response on the device (freshness-stamped) so repeating this exact search
     // is instant. Cache the server's own result list, not the merged `allResults` (which can
-    // carry a previous search's leftovers).
-    writeCache(ckey, d.results || []);
+    // carry a previous search's leftovers) — page fetches store the accumulated list.
+    writeCache(ckey, pageOffset ? (allResults || []) : (d.results || []));
     state.checkedAt = Date.now();
   }catch(e){
     if(mySeq!==searchSeq){ stopProgress=true; return; }   // superseded by a newer search
@@ -933,9 +943,9 @@ function render(spinner){
    // ("load more" grows it in LOAD_MORE_STEP batches); it never exceeds the pool.
    const nShown = Math.min(state.loaded, pool.length);
    shown = pool.slice(0, nShown);
-   // There's more to reveal when the pool has unshown items AND (if a Max-results cap
-   // is set) we haven't already reached it. Drives the "Load more" button below.
-   const hasMore = pool.length > nShown;
+   // There's more to reveal when the pool has unshown items OR the server still has
+   // pages we haven't fetched (state.total = the server-side result count).
+   const hasMore = pool.length > nShown || (state.total||0) > pool.length;
    const app=$('#app');
   // The whole screen is rebuilt on every render; keep the search box focused (and the
   // caret) if the user is in it, otherwise the keyboard closes mid-typing / when results land.
@@ -1045,7 +1055,7 @@ function render(spinner){
               'No matches with those filters. Try a different mood, year range, or search a specific title.')))}</div>`)}
    </div>
    ${(!spinner && subs.length && hasMore) ? `<div class="mt-6 flex flex-col items-center gap-2">
-     <button id="loadMore" class="bg-panel2 hover:bg-panel border border-line rounded-xl px-6 py-2.5 text-sm font-semibold text-onsub">Load more <span class="text-onmute">(${pool.length - nShown} more of ${state.limit ? state.limit : state.poolTotal})</span></button>
+     <button id="loadMore" class="bg-panel2 hover:bg-panel border border-line rounded-xl px-6 py-2.5 text-sm font-semibold text-onsub">${state.loadingMore?'Loading…':'Load more'} <span class="text-onmute">${state.loadingMore?'':(pool.length - nShown > 0 ? `(${pool.length - nShown} ready)` : `(${Math.max(0, Math.min(state.total||0, poolCap===Infinity?state.total||0:poolCap) - pool.length)} more on the server)`)}</span></button>
    </div>` : ''}`;
   if(_qFocus){ const q=document.getElementById('q'); if(q){ q.value=state.q; q.focus({preventScroll:true}); try{ q.setSelectionRange(_qS,_qE); }catch(e){} } }
 
@@ -1073,11 +1083,21 @@ function render(spinner){
   $('#maxResults').value = String(state.limit);
   // "Force refresh": ignore the phone cache and refetch this search from the server now.
   $('#refreshNow')?.addEventListener('click',()=>doSearch({force:true}));
-  // "Load more": reveal the next batch of the already-fetched pool. Instant (local
-  // slice) until the pool is exhausted — no refetch, no re-scrape.
+  // "Load more": reveal the next batch of the already-fetched pool (instant, local);
+  // once the fetched pool is exhausted, fetch the NEXT PAGE from the server — so
+  // browsing deep costs small requests instead of one huge one.
   $('#loadMore')?.addEventListener('click',()=>{
-    state.loaded = Math.min(state.loaded + LOAD_MORE_STEP, state.limit || state.poolTotal || Infinity);
-    render(false);
+    const pool=allResults||[];
+    if(pool.length > state.loaded){          // still have fetched-but-hidden cards
+      state.loaded = Math.min(state.loaded + LOAD_MORE_STEP, pool.length);
+      render(false);
+      return;
+    }
+    const cap = state.limit || Infinity;                       // Max results (0 = All)
+    const total = Math.min(state.total || 0, cap);
+    if(!pool.length || pool.length >= total || state.loadingMore) return;
+    state.loadingMore = true; render(false);
+    Promise.resolve(doSearch({offset: pool.length})).finally(()=>{ state.loadingMore=false; });
   });
   $('#gear')?.addEventListener('click',openSettings);
   $('#bannerkey')?.addEventListener('click',openSettings);

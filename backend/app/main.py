@@ -1356,11 +1356,11 @@ async def search(
                 base_pool = min(max(q.pool, 200), settings.fetch_all_pool)
             # Service browses cap the pull: non-prefiltered, only the top of the pool
             # can be provider-checked (2× the provider cap); prefiltered, everything
-            # TMDB returns is on the picked services, but each card still needs its
-            # chips attached, so the pool (and with it the cost) stays bounded at 200
-            # — the whole request must fit inside the free host's kill window.
+            # TMDB returns is on the picked services and each request only attaches
+            # chips for ITS page, so the pool can stay deep (500) — page 1 pays the
+            # discover cost once and the TMDB cache makes the later pages cheap.
             if q.channels:
-                base_pool = min(base_pool, 200 if prefiltered else max(2 * settings.max_providers, 300))
+                base_pool = min(base_pool, 500 if prefiltered else max(2 * settings.max_providers, 300))
             max_t = base_pool // len(dks)
             for dk in dks:
                 tasks.append(("tmdb", dk, _tmdb_discover(dk, q.genres, year_min, year_max, max_t, oc, q.channels, pid, q.english_only, prov_ids)))
@@ -1486,8 +1486,8 @@ async def search(
             and settings.tmdb_enabled and (tmdb_key() or tmdb_v4_key()):
         _pre_pool = _apply_filters(results, q, channels_prefiltered=True)
         _pre_sorted = _sort(_pre_pool, q)
-        _pre_disp = _pre_sorted if limit <= 0 else _pre_sorted[:limit]
-        _pre_page = _pre_disp[offset:offset + limit] if (paging and limit > 0) else _pre_disp
+        _pre_disp = _pre_sorted
+        _pre_page = _pre_disp[offset:offset + limit] if limit > 0 else _pre_disp
         _wanted = {g.lower() for g in list(q.genres) + (genres_for_mood(q.mood) if q.mood else [])}
         if _wanted:
             for r in _pre_page:
@@ -1511,14 +1511,18 @@ async def search(
         await _gather_bounded([_attach_rt(r) for r in rt_pool if r.title], 16,
                               progress_key=pid, progress_phase="ratings", progress_total=len(rt_pool))
     ordered = _sort(pool, q)
-    # limit 0 = "All": return the whole (filtered) pool; otherwise the top `limit`.
-    display_pool = ordered if limit <= 0 else ordered[:limit]
+    # `limit` is a PAGE size: the whole (pool-capped) ordered set is the result, and
+    # each request serves one offset..offset+limit slice of it. `total` tells the
+    # client how many titles exist so "Load more" can keep fetching pages. (Older
+    # clients that send their whole pool size as limit with no offset simply get the
+    # first `limit` — same behaviour as before.)
+    display_pool = ordered
     # Total the client *can* page through (the display pool size) — used to decide
     # whether a "load more" button should show. The returned `count` is the size of
     # THIS batch; the client tracks how many it has loaded and compares to `total`.
     total = len(display_pool)
     # Apply the "load more" offset: serve the next batch of the display pool.
-    filtered = display_pool[offset:offset + limit] if (paging and limit > 0) else display_pool
+    filtered = display_pool[offset:offset + limit] if limit > 0 else display_pool
     # Put the picked genres FIRST on every card: TMDB tags many titles with several
     # genres ("La Leyenda…" is Horror fourth, after Animation/Comedy/Family), so a
     # Horror browse otherwise shows cards that read "Animation, Comedy…" and look
@@ -1578,7 +1582,7 @@ async def search(
         filtered = [r for r in filtered if _no_extra_charge(r.platforms)]
     if pid:
         PROGRESS.pop(pid, None)  # search done; let the frontend's poll finish
-    return {"results": [r.to_dict() for r in filtered], "count": len(filtered)}
+    return {"results": [r.to_dict() for r in filtered], "count": len(filtered), "total": total}
 
 
 @app.post("/api/enrich")
