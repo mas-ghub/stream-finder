@@ -697,6 +697,9 @@ async function doSearch(opts){
   }catch(e){
     if(mySeq!==searchSeq){ stopProgress=true; return; }   // superseded by a newer search
     console.warn(e);
+    // A "load more" page fetch failing must NOT wipe the screen: keep the cards that
+    // are already there and put the button back so it can be tapped again.
+    if(pageOffset){ state.loadingMore=false; render(false); return; }
     // One silent retry (fresh connection, re-resolve backend) before showing the banner:
     // a transient network blip / waking Mac shouldn't greet the user with an error.
     if(!doSearch._retried){

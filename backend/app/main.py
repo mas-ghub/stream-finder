@@ -1355,12 +1355,13 @@ async def search(
             if q.fetch_all and q.pool:
                 base_pool = min(max(q.pool, 200), settings.fetch_all_pool)
             # Service browses cap the pull: non-prefiltered, only the top of the pool
-            # can be provider-checked (2× the provider cap); prefiltered, everything
-            # TMDB returns is on the picked services and each request only attaches
-            # chips for ITS page, so the pool can stay deep (500) — page 1 pays the
-            # discover cost once and the TMDB cache makes the later pages cheap.
+            # can be provider-checked (2× the provider cap); prefiltered, the pool
+            # must stay small because PAGE 1 pays for the whole discover (every 20
+            # titles = one TMDB round-trip) — a 500 pool made page 1 take 124s and
+            # the instance died under it. 240 = 12 discover calls + one chip page,
+            # which fits the free host with room to spare.
             if q.channels:
-                base_pool = min(base_pool, 500 if prefiltered else max(2 * settings.max_providers, 300))
+                base_pool = min(base_pool, 240 if prefiltered else max(2 * settings.max_providers, 300))
             max_t = base_pool // len(dks)
             for dk in dks:
                 tasks.append(("tmdb", dk, _tmdb_discover(dk, q.genres, year_min, year_max, max_t, oc, q.channels, pid, q.english_only, prov_ids)))

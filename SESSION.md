@@ -1091,6 +1091,15 @@ search share one entry (offset stripped from the key) and store the accumulated 
 
 Verified: Horror + Netflix page 1 = 60/232, page 2 = 60/232, zero overlap, 100% Netflix.
 
+## v1.85 addendum 2 — page 1 must fit the host (500-pool killed the instance)
+
+A 500-title pool made page 1 cost 26 discover round-trips: 124s on Render, and the instance
+died right after it (page 2 = instant 502 — the user saw "only 60"). The pool is the page-1
+cost, so it dropped to 240 (12 discover calls + one chip page ≈ 30-45s cold). Depth is now
+~240 per browse (Horror shows 120: TMDB has no Horror genre for TV, so films only). Also:
+a failed PAGE fetch no longer wipes the screen — the cards stay and the button comes back.
+
+
 
 
 
