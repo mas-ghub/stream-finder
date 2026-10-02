@@ -115,7 +115,7 @@ tailwind.config = {
 <div id="sf_topbar" aria-hidden="true"></div>
 <div id="app" class="min-h-full max-w-[1400px] mx-auto px-4 md:px-8" style="padding-bottom:calc(env(safe-area-inset-bottom,0px) + 6rem)"></div>
 <div id="modal"></div>
-<div id="toast" class="fixed bottom-20 left-1/2 -translate-x-1/2 z-[60] hidden"></div>
+<div id="toast" class="fixed bottom-28 left-1/2 -translate-x-1/2 z-[60] hidden"></div>
 
 <script>
 // Global error trap — turns ugly console errors (including SyntaxError, which
@@ -335,7 +335,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.92';
+const APP_VERSION = '1.93';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, total:0, loadingMore:false, checkedAt:null };
@@ -952,7 +952,9 @@ function updateMoreBar(intShown, intTotal, blnMore, blnBusy){
   let el=document.getElementById('moreBar');
   if(!el){
     el=document.createElement('button'); el.id='moreBar';
-    el.className='fixed bottom-4 right-4 z-50 bg-accent text-white text-sm font-semibold rounded-full px-4 py-2 shadow-lg';
+    // Big, centred tap target; see-through (with blur) so the cards underneath stay visible.
+    el.className='fixed left-1/2 -translate-x-1/2 z-50 text-white text-base font-bold rounded-full px-8 py-4 shadow-xl whitespace-nowrap';
+    el.style.cssText='bottom:calc(env(safe-area-inset-bottom,0px) + 16px);background:rgba(229,9,20,.78);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);border:1px solid rgba(255,255,255,.35);';
     el.addEventListener('click',loadMoreNow);
     document.body.appendChild(el);
   }
