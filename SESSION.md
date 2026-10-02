@@ -1033,5 +1033,21 @@ Data notes: TMDB's TV genre list has NO Horror (only movies) — that's why a Ho
 returns films only; same was true before. And the local 429-heavy test runs leave some
 provider misses cached ~6h — chips fill in on later browses.
 
+## v1.83 — Rotten Tomatoes is strictly opt-in
+
+The app's RT setting (⚙️ Settings → Rotten Tomatoes ratings) already defaulted OFF, and the
+boot flow even force-resets it — but the BACKEND ran the RT scrape for any request that
+didn't carry `rt_off=true`. Inverted trust: an old shell, a stray client, or a missing flag
+meant the slow per-title scrape ran uninvited.
+
+**Now:** the scrape runs ONLY when the request carries `rt_on=true`, which the app sends
+only when that device's settings have RT enabled. No flag → never runs (browse passes AND
+the detail view's /api/enrich). Verified: without the flag the progress phases go
+pulled → finishing (no ratings step); with it, ratings run after the chips have landed.
+Also: on a prefiltered browse the displayed page's chips attach BEFORE the RT pass, so
+cards land immediately instead of after a silent ratings scrape (first cards ~4s locally).
+Frontend sends `rt_on` / `rt_off` per its setting; version 1.83, shell v55.
+
+
 
 

@@ -335,7 +335,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.82';
+const APP_VERSION = '1.83';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, checkedAt:null };
@@ -602,7 +602,7 @@ async function doSearch(opts){
     getHousehold().forEach(c=>p.append('household', c));
   }
   if(state.englishOnly) p.set('english_only', 'true');
-  if(!state.rtOn) p.set('rt_off', 'true');  // skip the slow Rotten Tomatoes scrape step
+  if(state.rtOn) p.set('rt_on','true'); else p.set('rt_off','true');  // RT is opt-in: the scrape only runs when enabled here
   const hd=tmdbHeaders();
   // Live progress: give the backend an id; poll it while the search runs so the
   // UI can show "pulling N of M…" instead of an infinite spinner.
@@ -717,7 +717,7 @@ async function doSearch(opts){
 }
 
 async function enrich(r){
-  const body = { title:r.title, kind:r.kind, year:r.year, genres:r.genres, poster_url:r.poster_url, backdrop_url:r.backdrop_url, overview:r.overview, tmdb_id:r.tmdb_id, ratings:r.ratings, platforms:r.platforms };
+  const body = { title:r.title, kind:r.kind, year:r.year, genres:r.genres, poster_url:r.poster_url, backdrop_url:r.backdrop_url, overview:r.overview, tmdb_id:r.tmdb_id, ratings:r.ratings, platforms:r.platforms, rt_on:state.rtOn };
   try{ return await (await fetch(API+'/api/enrich',{method:'POST',headers:{'Content-Type':'application/json',...tmdbHeaders()},body:JSON.stringify(body)})).json(); }
   catch(e){ console.warn(e); return r; }
 }

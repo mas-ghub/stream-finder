@@ -303,6 +303,8 @@ class Query(BaseModel):
     free_only: bool = False
     english_only: bool = False
     rt_off: bool = False  # client opted out of Rotten Tomatoes (skips the slow scrape)
+    rt_on: bool = False   # client explicitly ENABLED Rotten Tomatoes in its settings —
+                          # RT is opt-in: without this flag the scrape never runs
     household: list[str] = Field(default_factory=list)
     fetch_all: bool = False
     pool: int | None = None
@@ -1269,6 +1271,7 @@ async def search(
     free_only: bool = False,
     english_only: bool = False,
     rt_off: bool = False,
+    rt_on: bool = False,
     household: list[str] = FQuery(default=[]),
     fetch_all: bool = False,
     pool: int | None = None,
@@ -1286,12 +1289,14 @@ async def search(
               year_max=year_max, min_rating=min_rating, min_rt=min_rt,
               channels=channels, where=where, stream_only=stream_only,
               free_only=free_only, english_only=english_only, rt_off=rt_off,
-              household=household, fetch_all=fetch_all, pool=pool, sort=sort,
+              rt_on=rt_on, household=household, fetch_all=fetch_all, pool=pool, sort=sort,
               limit=limit, offset=max(0, offset))
-    # Client opted out of Rotten Tomatoes (or it's disabled): skip the scrape step.
-    # rt_off also makes the RT/min-RT *filters* no-ops — with RT off there's nothing
-    # to filter or sort by, so a title without a score isn't wrongly dropped.
-    if q.rt_off:
+    # Rotten Tomatoes is OPT-IN: the scrape runs only when the client's own settings
+    # have it enabled (rt_on). No flag from an old/unknown client means NO RT — the
+    # slow "Reading ratings" step must never surprise anyone.
+    # Without RT the RT/min-RT *filters* are no-ops too — with no scores there's
+    # nothing to filter or sort by, so a title without a score isn't wrongly dropped.
+    if not q.rt_on:
         q.min_rt = None
         if q.sort in ("rt_critic", "rt_audience"):
             q.sort = "relevance"
@@ -1454,7 +1459,7 @@ async def search(
         # pool first (capped at 200 for speed; the cache makes re-sorts free), then
         # every filter (incl. the channel filter) runs against the fresh values.
         pool = results
-        if settings.rt_enabled and not q.rt_off and (q.min_rt or rt_sort):
+        if settings.rt_enabled and q.rt_on and (q.min_rt or rt_sort):
             if pid:
                 _progress(pid, phase="ratings", done=0, total=min(len(pool), 200))
             await _gather_bounded([_attach_rt(r) for r in pool[:200] if r.title], 10,
@@ -1483,13 +1488,12 @@ async def search(
         await _gather_bounded([_attach_providers(r) for r in _pre_page], 16,
                               progress_key=pid, progress_phase="finishing", progress_total=len(_pre_page),
                               results=_pre_page, only_provided=True, snap_every=10)
-    # RT for everything that survived, capped at 100: RT is a per-title scrape (the
-    # slowest call we make) and an "All"-size service browse can leave a few hundred
-    # survivors — an uncapped pass here alone is minutes on the free tier. Cards
-    # beyond the cap simply show no rating until a later browse caches them. The
-    # cache makes repeats free. Skipped entirely when the client turned Rotten
-    # Tomatoes off (rt_off) — that's the slow step.
-    if settings.rt_enabled and not q.rt_off:
+    # RT for everything that survived, capped at 100 — and ONLY when the client's
+    # settings have Rotten Tomatoes enabled (rt_on, opt-in). RT is a per-title scrape
+    # (the slowest call we make) and an "All"-size service browse can leave a few
+    # hundred survivors, so it must never run uninvited. Cards beyond the cap simply
+    # show no rating until a later browse caches them. The cache makes repeats free.
+    if settings.rt_enabled and q.rt_on:
         rt_pool = pool[:100]
         if pid:
             _progress(pid, phase="ratings", done=0, total=len(rt_pool))
@@ -1572,7 +1576,9 @@ async def search(
 async def enrich(payload: dict):
     title = payload.get("title", "")
     year, kind = payload.get("year"), payload.get("kind", "movie")
-    rt = await _rt_lookup(title, year, kind)
+    # RT here too is opt-in: only scrape when the requesting device's settings
+    # have it enabled (the client sends rt_on with the enrich body).
+    rt = await _rt_lookup(title, year, kind) if (settings.rt_enabled and payload.get("rt_on")) else {}
 
     # If we have a TMDB id, pull full credits + trailer from TMDB (more reliable)
     tmdb_id = payload.get("tmdb_id")
