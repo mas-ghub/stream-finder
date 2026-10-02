@@ -335,7 +335,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.97';
+const APP_VERSION = '1.98';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, total:0, loadingMore:false, checkedAt:null };
@@ -569,7 +569,7 @@ async function doSearch(opts){
   searchCtl = window.AbortController ? new AbortController() : null;
   // Fresh search → start from a small first page; "Load more" grows it from here.
   // (Page fetches — offset>0 — keep the running count and just append.)
-  if(!pageOffset) state.loaded = Math.min(state.limit || 40, 40);
+  if(!pageOffset) state.loaded = 60;   // a first page is 60; show it all
   // The "My services" lens: browse the pool of everything on the services you
   // have (all of them by default). A text search or a mood turns the lens off.
   const myCh = lensChannels();
@@ -622,6 +622,7 @@ async function doSearch(opts){
       allResults = hit.results || [];
       state.total = hit.total || allResults.length;   // so Load more still knows the server has more pages
       state.nextOffset = hit.next || allResults.length;
+      state.loaded = allResults.length;   // show everything we have (no 40-at-a-time local reveal)
       state.checkedAt = hit._t;
       window.__backendDown = false;
       doSearch._retried = false;
