@@ -125,7 +125,7 @@ window.showErr = function(msg, extra, kind){
   if(++window.__errCount > 1) return;              // only show the first
   const el = document.getElementById('app'); if(!el) return;
   const isNet = kind === 'network' || /couldn't reach|failed to fetch|load failed|unreachable|network error|internet error|failed to load/i.test(String(msg));
-  const perm = isNet && ((window.__diag && (window.__diag.blocked || window.__diag.steps.some(s => /network-error/.test(s.status))))
+  const perm = isNet && ((window.__diag && window.__diag.steps.some(s => /network-error/.test(s.status) && typeof isLocalAddr === 'function' && isLocalAddr(s.backend)))
     || (/permission|local network|blocked|not allowed|private network/i.test(String(msg)) && (typeof isLocalAddr === 'function' && isLocalAddr(API))));
   const icon = perm ? '🔒' : '⚠️';
   const title = perm ? 'Your browser is blocking local network access'
@@ -201,7 +201,7 @@ function sendDiag(err){
   const hd = (typeof tmdbHeaders==='function') ? tmdbHeaders() : {};
   const body = Object.assign({err: String(err||'').slice(0,600), page: location.href,
     api: (typeof API!=='undefined'?API:''), ua: navigator.userAgent}, window.__diag||{});
-  try{ fetch(MAC_LAN + '/api/diag', {method:'POST', headers:hd, body: JSON.stringify(body)}).catch(()=>{}); }catch(e){}
+  try{ fetch(RENDER_API + '/api/diag', {method:'POST', headers:hd, body: JSON.stringify(body)}).catch(()=>{}); }catch(e){}
 }
 window.addEventListener('error', e => {
   const loc = e.filename ? ` at ${e.filename}:${e.lineno}` : '';
@@ -244,7 +244,7 @@ function backendCandidates(){
   const b = location.search ? new URLSearchParams(location.search).get('backend') : null;
   if(b) c.push(b);                                  // explicit ?backend= wins
   const stored = localStorage.getItem('sf_backend');
-  if(stored) c.push(stored);                        // last one that worked
+  if(stored && (onMac() || !isLocalAddr(stored))) c.push(stored);   // last one that worked (a stale LAN address is ignored off the Mac: probing it triggers the local-network block)
   c.push(RENDER_API);                              // the cloud: the single shared backend for every device
   return c.filter((v, i) => c.indexOf(v) === i);   // dedupe, keep order
 }
@@ -272,7 +272,7 @@ async function probeCandidates(cands){
       window.__diag.resolved = c; return c; // some real backend answered -> use it
     }catch(e){
       status = (e && e.name === 'TimeoutError') ? 'timeout' : 'network-error';
-      if(e && e.name === 'TypeError' && c) window.__diag.blocked = true;
+      if(e && e.name === 'TypeError' && c && isLocalAddr(c)) window.__diag.blocked = true;   // only a LOCAL address can be a local-network block (a dead cloud server also throws TypeError)
     }
     window.__diag.steps.push({backend:c, status, ms:Date.now()-t0});
   }
@@ -335,7 +335,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.86';
+const APP_VERSION = '1.87';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, total:0, loadingMore:false, checkedAt:null };
