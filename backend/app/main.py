@@ -1464,6 +1464,25 @@ async def search(
         # Everything else (service filter, mood, year, genre, text) is pre-filtered
         # and provider-checked, so a single filter pass is exact.
         pool = _apply_filters(results, q, channels_prefiltered=prefiltered)
+    # Prefiltered + ordinary sort: attach the displayed page's chips NOW, before the
+    # RT pass, streamed to the screen. The RT pass publishes no partials, so doing
+    # chips after it left a silent minute of "Nothing on <service>" even though the
+    # result set was already known — the pool IS the answer on this path.
+    if prefiltered and not rt_sort and not q.min_rt and not q.min_rating \
+            and settings.tmdb_enabled and (tmdb_key() or tmdb_v4_key()):
+        _pre_pool = _apply_filters(results, q, channels_prefiltered=True)
+        _pre_sorted = _sort(_pre_pool, q)
+        _pre_disp = _pre_sorted if limit <= 0 else _pre_sorted[:limit]
+        _pre_page = _pre_disp[offset:offset + limit] if (paging and limit > 0) else _pre_disp
+        _wanted = {g.lower() for g in list(q.genres) + (genres_for_mood(q.mood) if q.mood else [])}
+        if _wanted:
+            for r in _pre_page:
+                r.genres.sort(key=lambda g: g.lower() not in _wanted)
+        if pid:
+            _progress(pid, phase="finishing", done=0, total=len(_pre_page))
+        await _gather_bounded([_attach_providers(r) for r in _pre_page], 16,
+                              progress_key=pid, progress_phase="finishing", progress_total=len(_pre_page),
+                              results=_pre_page, only_provided=True, snap_every=10)
     # RT for everything that survived, capped at 100: RT is a per-title scrape (the
     # slowest call we make) and an "All"-size service browse can leave a few hundred
     # survivors — an uncapped pass here alone is minutes on the free tier. Cards
