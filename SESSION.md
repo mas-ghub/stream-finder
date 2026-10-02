@@ -1,6 +1,73 @@
 # Stream Finder — dev handover (SESSION)
 
 Working notes so we can pick up where we left off. Not user-facing (that's README.md).
+
+## ⭐ CURRENT STATE — READ THIS FIRST (2026-10-02, v1.84 / sw shell-v56)
+
+**What changed today (the short version):** service filtering moved from brute-force per-title
+scans ("Checking where it streams… N/998" — the cause of every "couldn't reach the results
+server") to TMDB server-side filtering + small paged requests. Browses are now correct
+(verified 100% the picked service), fast (~10-40s cold), and deep via paging.
+
+**Architecture right now:**
+- Service browses add `with_watch_providers=<ids>&watch_region=GB` to every TMDB discover
+  query. **PLURAL — `with_watch_provider` (singular) is SILENTLY IGNORED by TMDB.** That one
+  letter caused a full day of "it's showing other services" bugs. Ids come from
+  `PROVIDER_IDS` / `provider_ids_for()` in `backend/app/channels.py`. Channel 4 = TMDB id 103;
+  **Channel 5 is not tracked by TMDB at all** (never appears in any title's platforms).
+  The pool returned IS the answer set — the per-title scan only attaches chips to displayed
+  cards. Mood "Sport" works through this too (keyword 6075; TMDB has no Sports genre).
+- Paging: the client sends `limit` = page size (60, or the Max-results value when smaller)
+  and `offset`; the backend returns `count` + `total` (the whole result-set size). The app's
+  "Load more" reveals fetched-but-hidden cards first, then fetches the next offset slice.
+- Pool caps (DO NOT RAISE — page 1 pays the whole discover, and a 500 pool made Render's
+  instance die at 124s, stranding the user at 60 cards): prefiltered **240**,
+  scan path **2 × `SF_MAX_PROVIDERS`** (default 200). RT scrape: opt-in only, capped 100.
+- **Rotten Tomatoes is OPT-IN**: the scrape runs ONLY when the request carries `rt_on=true`,
+  which the app sends only when that device's ⚙️ Settings have RT enabled. `rt_off` alone is
+  NOT the gate any more. The detail view's `/api/enrich` respects the same flag.
+- Phone cache: one entry per search (key strips `progress_id` AND `offset`), 24h TTL, max 6
+  entries, skips entries >300 KB; page fetches store the accumulated list.
+- Order on service browses is popularity-first (vote_average led with obscure internationals);
+  the picked mood's genres are sorted to the FRONT of each card's chips (TMDB often tags
+  Horror 4th — that read like a filter leak).
+
+**Free-tier reality (Render, 512MB/0.1CPU):** ~3-6 TMDB ops/sec, kills long requests (502 at
+~50-120s, variable), ephemeral disk (cache dies on every restart). EVERY request must fit
+~40s of work. First browse after a quiet period is the cold one.
+
+**Verify after ANY backend change** — use the user's EXACT request shapes:
+```
+# mood + single service (should be ~60, total 100-240, every platform netflix):
+curl -G "https://stream-finder-api.onrender.com/api/search" \
+  --data kind=any --data limit=60 --data 'genres=Horror' --data channel=netflix \
+  --data fetch_all=true --data where=true --data rt_off=true
+# page 2 must not overlap page 1:
+  ... --data offset=60 ...
+# the user's real default browse is the 11-service household lens (netflix disney apple sky
+# prime paramount hulu bbc itvx channel4 channel5 as repeated --data channel=...) with
+# limit=60 — THAT is the request that used to 502. Test it, not just netflix-only.
+```
+NEVER test with POST (the route is GET — a missing `curl -G` returns a misleading 405).
+
+**Deploy wiring:** every push to `main` auto-deploys the frontend to GitHub Pages (verify
+APP_VERSION at mas-ghub.github.io/stream-finder). The RENDER BACKEND DOES NOT AUTO-DEPLOY
+reliably — the user must manually "Redeploy latest" in the Render dashboard after every
+backend change. The Mac backend (launchd `com.masparrow.stream-finder.lan`, :8443, venv in
+backend/.venv) always runs the working tree — restart it with
+`launchctl kickstart -k gui/$(id -u)/com.masparrow.stream-finder.lan`.
+Do NOT run test.sh (it pkill-kills the launchd server).
+
+**Known TMDB facts:** no Sports genre (use keyword 6075 — works with the plural provider
+filter); no Horror/Sci-Fi-etc TV genre for Horror (Horror mood = films only, ~120 not 240);
+`total_results` caps its display at 20001; comma in `with_genres` = AND, pipe = OR.
+
+**Next feature (user-approved, NOT started):** "you may also like…" recommendations.
+**Known accepted limits:** browse depth ~240 per mood on the free tier (SF_MAX_PROVIDERS /
+pool caps raise it on a paid host); Channel 5 contributes no titles (TMDB doesn't track it).
+
+---
+
 Last updated: v1.81 — phone-side results cache (24h) + "Force refresh" (repeats are instant, no backend round-trip).
 
 ## FUTURE IDEA (user, not now): host without depending on the Mac staying on/awake/logged in (e.g. always-on hosting). Mac currently needs: plugged in, lid open, logged in. `sudo pmset -c sleep 0` applied (display sleep still 10 min).

@@ -19,6 +19,8 @@ Sitcom, Sci-Fi, Kids, Doc, Sport…), and you get films + series with:
 - **Max results** — 25 / 50 / 100 / 200 / 500 / **All**
 - **Instant repeats** — your phone caches each browse for 24h, so re-opening the same one shows
   straight away (no waiting on "checking where it streams"); tap **⟳ Force refresh** for fresh data.
+- **Load more pages** — browses start with 60 titles and "Load more" fetches the next page from
+  the server, so you can browse deep (~240 titles per mood) without long loads.
 
 > **Where to watch needs the TMDB key** (it's TMDB's free Watch Providers data,
 > region = UK). Shows the *subscriptions* first (e.g. "Dune → Max, Sky
