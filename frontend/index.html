@@ -335,7 +335,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.90';
+const APP_VERSION = '1.91';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, total:0, loadingMore:false, checkedAt:null };
@@ -434,7 +434,7 @@ function setLimit(v){ try{ localStorage.setItem('sf_max_results', String(v===0?0
 // round-trip, so the slow "Checking where it streams…" pass is skipped. Only "Force
 // refresh" or the TTL lapsing goes back to the server. Bounded LRU + a size guard so it
 // can never grow without limit; a quota error just silently skips caching (never fatal).
-const CACHE_PREFIX = 'sf_c_';
+const CACHE_PREFIX = 'sf_c2_';   // bumped when paging changed (old 'sf_c_' entries carry the old 240 cap)
 const CACHE_TTL = 24 * 3600 * 1000;   // 24h — matches the backend's provider cache window
 const CACHE_MAX = 6;                  // keep the most recent N searches
 const CACHE_MAX_BYTES = 300 * 1024;   // skip a single oversized ("All") page
@@ -448,6 +448,8 @@ function readCache(key){
   try{ const o = JSON.parse(localStorage.getItem(key) || 'null'); return (o && o._t && Array.isArray(o.results) && o.total > 0) ? o : null; }   // entries without a server total (pre-paging) are ignored
   catch(e){ return null; }
 }
+// One-time: drop entries written by earlier versions (they hold the old capped totals).
+try{ Object.keys(localStorage).filter(k=>k.indexOf('sf_c_')===0).forEach(k=>localStorage.removeItem(k)); }catch(e){}
 function cacheKeys(){
   const ks=[]; for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); if(k && k.indexOf(CACHE_PREFIX)===0) ks.push(k); }
   return ks;
