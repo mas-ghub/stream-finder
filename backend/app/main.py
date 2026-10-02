@@ -8,6 +8,8 @@ gracefully — with no TMDB key you still get shows via TVMaze.
 from __future__ import annotations
 
 import asyncio
+import functools
+import inspect
 import json
 import logging
 import os
@@ -1261,7 +1263,40 @@ async def meta():
     }
 
 
+def _cancel_on_disconnect(fn):
+    """Stop a request's work the moment the client hangs up.
+
+    FastAPI keeps running an `async def` endpoint after the browser aborts (the user
+    picked a different search). On the free-tier instance that abandoned search keeps
+    eating TMDB calls/CPU and the NEW search queues behind it. This runs the handler as
+    a task, polls for the disconnect, and cancels the task so the new search gets the
+    whole instance. The route signature gains a `request` param so FastAPI injects it.
+    """
+    sig = inspect.signature(fn)
+    req_param = inspect.Parameter("request", inspect.Parameter.KEYWORD_ONLY, annotation=Request)
+
+    @functools.wraps(fn)
+    async def wrapper(*args, request: Request, **kwargs):
+        task = asyncio.ensure_future(fn(*args, **kwargs))
+        try:
+            while True:
+                done, _ = await asyncio.wait({task}, timeout=0.5)
+                if done:
+                    return task.result()
+                if await request.is_disconnected():
+                    task.cancel()
+                    log.warning("search cancelled: client disconnected")
+                    return JSONResponse({"detail": "client closed request"}, status_code=499)
+        except asyncio.CancelledError:
+            task.cancel()
+            raise
+
+    wrapper.__signature__ = sig.replace(parameters=[*sig.parameters.values(), req_param])
+    return wrapper
+
+
 @app.get("/api/search")
+@_cancel_on_disconnect
 async def search(
     q: str | None = None,
     kind: str = "any",
