@@ -881,13 +881,18 @@ def _tpath(kind: str) -> str:
     return "tv" if kind == "show" else "movie"
 
 
-async def _gather_bounded(coros, limit: int = 24, *, progress_key: str | None = None, progress_phase: str | None = None, progress_total: int | None = None, results: list | None = None) -> None:
+async def _gather_bounded(coros, limit: int = 24, *, progress_key: str | None = None, progress_phase: str | None = None, progress_total: int | None = None, results: list | None = None, only_provided: bool = False, snap_every: int = 1) -> None:
     """Run coroutines with a cap on simultaneous HTTP calls (avoids rate-limit
     spikes when enriching a large pool). If a progress_key is given, reports a
     running count for the UI's live 'pulling N…' indicator. If `results` is the
     page being enriched, a growing snapshot of the completed items is exposed on
     the same progress channel (partial_results) so the client can render cards
-    as they finish instead of waiting for the whole batch."""
+    as they finish instead of waiting for the whole batch. With only_provided,
+    the snapshot holds just the titles whose provider data has landed (used while
+    the provider scan runs — the client hides platform-less cards behind a service
+    lens anyway, and it keeps the polled payload small). snap_every throttles how
+    often that snapshot is rebuilt (re-serialising a 600-title list on every one
+    of 600 completions is needless CPU)."""
     sem = asyncio.Semaphore(limit)
     total = len(coros)
     done = 0
@@ -899,7 +904,8 @@ async def _gather_bounded(coros, limit: int = 24, *, progress_key: str | None = 
     if progress_key:
         _progress(progress_key, phase=progress_phase or "working", done=prev, total=t0)
         if results is not None:
-            _progress(progress_key, partial_results=[r.to_dict() for r in results])
+            rows = [r for r in results if r.platforms or not only_provided]
+            _progress(progress_key, partial_results=[r.to_dict() for r in rows])
 
     async def run(c):
         nonlocal done
@@ -911,8 +917,9 @@ async def _gather_bounded(coros, limit: int = 24, *, progress_key: str | None = 
             finally:
                 done += 1
                 f = {"phase": progress_phase or "working", "done": max(prev, done), "total": t0}
-                if results is not None:
-                    f["partial_results"] = [r.to_dict() for r in results]
+                if results is not None and (done == total or done % max(1, snap_every) == 0):
+                    rows = [r for r in results if r.platforms or not only_provided]
+                    f["partial_results"] = [r.to_dict() for r in rows]
                 if progress_key:
                     _progress(progress_key, **f)
 
@@ -1388,16 +1395,21 @@ async def search(
         # actually survive to the page, so only THOSE need provider data. Capping here
         # (instead of scanning the whole ~1000 pool) is the main cold-start win: a
         # 50-result Netflix browse fetches ~50 provider lookups, not ~500. An "All"
-        # size (limit 0) checks the whole pool (the provider cache makes it cheap once
-        # warm, and a low-hit-rate service like Netflix can have its hits scattered
-        # deep, so we can't safely truncate for an unbounded "All").
-        prov_limit = limit if limit > 0 else len(results)
+        # size (limit 0) scans the pool too, but capped at max_providers — scanning
+        # ~1000 titles in one request is what time-outs the free tier, and the
+        # provider cache makes the next browse (or a re-sort) free.
+        prov_limit = limit if limit > 0 else min(len(results), settings.max_providers)
         prov_target = results[:prov_limit]
         if pid:
             _progress(pid, phase="providers", done=0, total=len(prov_target))
         await _gather_bounded([_resolve_tmdb_id(r) for r in prov_target if not r.tmdb_id])
+        # results=prov_target + only_provided: cards stream onto the screen as each
+        # title's provider data lands, instead of the screen sitting empty until the
+        # whole scan finishes (the client hides platform-less cards behind a service
+        # lens anyway, so this can't show anything that shouldn't be there).
         await _gather_bounded([_attach_providers(r) for r in prov_target if r.tmdb_id], 100,
-                              progress_key=pid, progress_phase="providers", progress_total=len(prov_target))
+                              progress_key=pid, progress_phase="providers", progress_total=len(prov_target),
+                              results=prov_target, only_provided=True, snap_every=25)
     if rt_sort or q.min_rt or q.min_rating:
         # RT / min-rating filtering needs rating data: RT is attached to the whole
         # pool first (capped at 200 for speed; the cache makes re-sorts free), then
@@ -1413,16 +1425,19 @@ async def search(
         # Everything else (service filter, mood, year, genre, text) is pre-filtered
         # and provider-checked, so a single filter pass is exact.
         pool = _apply_filters(results, q)
-    # RT for EVERY title that survived (no cap), so the client can sort/filter by
-    # RT locally and the result set is identical no matter the pool order or which
-    # device made the request. A ~200-title service browse is a few seconds; the
-    # provider/rating cache makes repeat queries free. Skipped entirely when the
-    # client turned Rotten Tomatoes off (rt_off) — that's the slow step.
+    # RT for everything that survived, capped at 200: RT is a per-title scrape (the
+    # slowest call we make) and an "All"-size service browse can leave a few hundred
+    # survivors — an uncapped pass here is minutes on the free tier. The cache makes
+    # repeats free. Skipped entirely when the client turned Rotten Tomatoes off
+    # (rt_off) — that's the slow step.
     if settings.rt_enabled and not q.rt_off:
+        rt_pool = pool[:200]
         if pid:
-            _progress(pid, phase="ratings", done=0, total=len(pool))
-        await _gather_bounded([_attach_rt(r) for r in pool if r.title], 10,
-                              progress_key=pid, progress_phase="ratings", progress_total=len(pool))
+            _progress(pid, phase="ratings", done=0, total=len(rt_pool))
+        # 16-way: an All-size browse RT-scrapes up to 200 titles; at the old 10-way
+        # that alone was a minute-plus on the free host. The cache makes repeats free.
+        await _gather_bounded([_attach_rt(r) for r in rt_pool if r.title], 16,
+                              progress_key=pid, progress_phase="ratings", progress_total=len(rt_pool))
     ordered = _sort(pool, q)
     # limit 0 = "All": return the whole (filtered) pool; otherwise the top `limit`.
     display_pool = ordered if limit <= 0 else ordered[:limit]
@@ -1443,7 +1458,7 @@ async def search(
         await _gather_bounded(
             [asyncio.gather(*([_attach_providers(r)] if need_providers else []) + [_attach_cast(r)])
              for r in filtered],
-            8, progress_key=pid, progress_phase="finishing", progress_total=len(filtered), results=filtered)
+            16, progress_key=pid, progress_phase="finishing", progress_total=len(filtered), results=filtered)
     # "Free" (the user's meaning) = included in a service you already pay for, i.e. it
     # costs nothing *extra*. Kept when the title is on one of the user's ticked
     # subscriptions (any channel type — a free-to-air service you "have" also counts)

@@ -986,3 +986,24 @@ request exactly `state.limit`; plain text searches and non-service searches keep
 300 pool (no provider calls there, and exact re-sorts stay exact). Bump "Max results" for a
 deeper browse — that's the new depth knob for service searches.
 
+## v1.83 (backend) — "All" + service lens can't time the free tier out any more
+
+**Symptom:** with Max results = **All** and a service lens on, the request provider-checked
+the whole ~1000-title pool in one request ("Checking where it streams… 324/998"), then
+RT-scraped every survivor and cast-enriched the page. Render's free tier kills requests like
+that — hence "couldn't reach the results server" (and the restart the user saw; the keepalive
+ping was green the whole time, so it wasn't a sleep).
+
+**Fixes (backend only — Render needs a manual redeploy):**
+- One request now provider-checks at most `SF_MAX_PROVIDERS` (default **600**) titles, even
+  for an "All" browse. Scanning ~1000 titles in one request is what time-outs the free tier;
+  the provider cache makes the next browse or re-sort free.
+- The provider scan now **streams cards**: partial results (platform-landed only) ride the
+  progress channel, so cards appear while the scan runs instead of the screen sitting empty.
+- Rotten Tomatoes pass capped at 200 titles and raised 10→16-way; the cast/details pass
+  raised 8→16-way. Measured: All + Netflix + RT on went 48s → **9.3s** locally (warm-ish),
+  and the same Thriller browse that returned no body on Render returns 200.
+- TMDB discover (previous commit) fetches each bucket's remaining pages in a bounded parallel
+  burst instead of one round-trip at a time.
+
+
