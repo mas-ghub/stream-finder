@@ -17,6 +17,8 @@ Sitcom, Sci-Fi, Kids, Doc, Sport…), and you get films + series with:
 - **Channel families** — pick **Sky** and it matches every Sky brand (Sky Cinema,
   Sky Showcase, Sky Go); the "where to watch" list is scoped to the channel you picked
 - **Max results** — 25 / 50 / 100 / 200 / 500 / **All**
+- **Instant repeats** — your phone caches each browse for 24h, so re-opening the same one shows
+  straight away (no waiting on "checking where it streams"); tap **⟳ Force refresh** for fresh data.
 
 > **Where to watch needs the TMDB key** (it's TMDB's free Watch Providers data,
 > region = UK). Shows the *subscriptions* first (e.g. "Dune → Max, Sky

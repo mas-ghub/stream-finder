@@ -1,11 +1,33 @@
 # Stream Finder — dev handover (SESSION)
 
 Working notes so we can pick up where we left off. Not user-facing (that's README.md).
-Last updated: v1.80 — genre/mood filter fix (Films pool no longer crowds out Series matches), Sport mood works, cache-boot crash fixed.
+Last updated: v1.81 — phone-side results cache (24h) + "Force refresh" (repeats are instant, no backend round-trip).
 
 ## FUTURE IDEA (user, not now): host without depending on the Mac staying on/awake/logged in (e.g. always-on hosting). Mac currently needs: plugged in, lid open, logged in. `sudo pmset -c sleep 0` applied (display sleep still 10 min).
 
-## v1.80 (current): genre/mood filter fix + Sport works + cache-boot crash
+## v1.81 (current): phone-side results cache + "Force refresh"
+User: "is there a way of getting the data and … finding out how long the program/film will be on
+… like an expiry date? so we could somehow store data on the user's phone" — i.e. make repeats fast.
+- **No per-title expiry exists.** TMDB's `watch/providers` payload is only `link` +
+  `flatrate`/`rent`/`buy`/`free` lists — **no** start/end date (verified on Stranger Things/GB).
+  That availability window is JustWatch's (TMDB's upstream) and isn't exposed in the free API, so
+  "leaving on X" isn't buildable for free. The practical lever is **cache freshness**, so that's this.
+- **Results are now cached ON THE PHONE (`index.html`).** `doSearch()` stores the response in
+  `localStorage` under `sf_c_<query>` (freshness-stamped; `progress_id` stripped from the key),
+  TTL **24h** (matches the backend provider window). Repeating the same search (same filters +
+  service lens) renders **instantly with zero backend round-trips** — the slow "Checking where it
+  streams…" pass is skipped entirely. Bounded LRU (**6** entries, ≤300 KB each) + quota-safe write
+  so it can't grow without limit; an oversized "All" page is simply not cached.
+- **"⟳ Force refresh"** + "🕒 Data {just now / N min / N h ago}" in the results header: tap to
+  bypass the cache and refetch now. Nothing is force-fetched otherwise until the 24h TTL lapses.
+  Deliberately **not** done in the service worker — `sw.js` must still not intercept `/api/*` (v1.42).
+- Verified (headless Chrome, local backend): first search writes 1 key + 1 `/api/search`; reload
+  renders 40 cards from cache with **0** `/api/search` calls ("Data just now"); Force refresh issues
+  exactly 1 request; a mood change writes a 2nd key; LRU prunes 10→6.
+- `APP_VERSION` → **1.81**; `sw.js` → `sf-shell-v53`. **Frontend-only** → Pages auto-deploys on push
+  (no Render change needed for this one).
+
+## v1.80: genre/mood filter fix + Sport works + cache-boot crash
 User: "the genre selection isn't working", and a step that "takes ages … checking something" (the
 provider pass). Note: the UI's genre selector **is** the **Mood** chips (there is no separate
 genre row; `state.genres` exists but nothing populates it) — so "genre selection" = the moods.

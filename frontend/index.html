@@ -335,10 +335,10 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.80';
+const APP_VERSION = '1.81';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
-let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0 };
+let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, checkedAt:null };
 // "Load more" reveals more of the already-fetched pool in batches (instant, local)
 // before it asks the backend for the next offset slice. 40 = a fast first paint.
 const LOAD_MORE_STEP = 40;
@@ -427,6 +427,56 @@ function setRtOn(on){ try{ localStorage.setItem('sf_rt', on?'1':'0'); }catch(e){
 function rtNoticeDismissed(){ try{ return sessionStorage.getItem('sf_rt_notice')==='1'; }catch(e){ return false; } }
 function setLimit(v){ try{ localStorage.setItem('sf_max_results', String(v===0?0:Math.min(Math.max(1,v),1000))); }catch(e){} }
 
+// ---------- phone-side results cache ----------
+// TMDB's provider data carries no "leaving on" date, so we can't expire per title. Instead
+// we cache each search's response on the device, freshness-stamped: repeating the same
+// search (same filters + service lens) renders INSTANTLY from the phone with no backend
+// round-trip, so the slow "Checking where it streams…" pass is skipped. Only "Force
+// refresh" or the TTL lapsing goes back to the server. Bounded LRU + a size guard so it
+// can never grow without limit; a quota error just silently skips caching (never fatal).
+const CACHE_PREFIX = 'sf_c_';
+const CACHE_TTL = 24 * 3600 * 1000;   // 24h — matches the backend's provider cache window
+const CACHE_MAX = 6;                  // keep the most recent N searches
+const CACHE_MAX_BYTES = 300 * 1024;   // skip a single oversized ("All") page
+function cacheKeyFor(params){
+  const q = new URLSearchParams(params);
+  q.delete('progress_id');            // unique per search — must not be part of the key
+  return CACHE_PREFIX + q.toString();
+}
+function readCache(key){
+  try{ const o = JSON.parse(localStorage.getItem(key) || 'null'); return (o && o._t && Array.isArray(o.results)) ? o : null; }
+  catch(e){ return null; }
+}
+function cacheKeys(){
+  const ks=[]; for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); if(k && k.indexOf(CACHE_PREFIX)===0) ks.push(k); }
+  return ks;
+}
+function pruneCache(){
+  const ks=cacheKeys();
+  if(ks.length<=CACHE_MAX) return;
+  ks.sort((a,b)=>((readCache(a)||{})._t||0)-((readCache(b)||{})._t||0));  // oldest first
+  ks.slice(0, ks.length-CACHE_MAX).forEach(k=>{ try{ localStorage.removeItem(k); }catch(e){} });
+}
+function writeCache(key, results){
+  const blob = JSON.stringify({ _t: Date.now(), results: results || [] });
+  if(blob.length > CACHE_MAX_BYTES) return;   // too big to store safely — skip
+  try{ localStorage.setItem(key, blob); pruneCache(); }
+  catch(e){                                   // quota error → drop the oldest entry, retry once
+    try{
+      const ks=cacheKeys().sort((a,b)=>((readCache(a)||{})._t||0)-((readCache(b)||{})._t||0));
+      if(ks.length) localStorage.removeItem(ks[0]);
+      localStorage.setItem(key, blob);
+    }catch(e2){/* still too big — fine, just don't cache */}
+  }
+}
+function cacheAgeLabel(ts){
+  const s=Math.max(0,(Date.now()-ts)/1000);
+  if(s<90) return 'just now';
+  if(s<3600) return Math.round(s/60)+' min ago';
+  if(s<86400) return Math.round(s/3600)+' h ago';
+  return Math.round(s/86400)+' d ago';
+}
+
 // Map a provider onto a known channel id (mirror of backend channels.py).
 const CH_ALIAS = {};
 // Sky sub-brands fold into "sky" so a Sky filter/picker matches Sky Cinema,
@@ -507,14 +557,14 @@ async function fetchMeta(){
 }
 
 let searchSeq = 0, searchCtl = null;
-async function doSearch(){
+async function doSearch(opts){
+  const force = !!(opts && opts.force);   // "Force refresh" bypasses the phone cache
   // Latest click wins: cancel any search in flight instead of ignoring the new click.
   const mySeq = ++searchSeq;
   if(searchCtl) try{ searchCtl.abort(); }catch(e){}
   searchCtl = window.AbortController ? new AbortController() : null;
   // Fresh search → start from a small first page; "Load more" grows it from here.
   state.loaded = Math.min(state.limit || 40, 40);
-  busy = true; render(true);
   // The "My services" lens: browse the pool of everything on the services you
   // have (all of them by default). A text search or a mood turns the lens off.
   const myCh = lensChannels();
@@ -553,6 +603,23 @@ async function doSearch(){
   // UI can show "pulling N of M…" instead of an infinite spinner.
   const pid='s'+Date.now().toString(36);
   p.set('progress_id', pid);
+  // Phone-side cache: an identical search (same filters + service lens), still fresh, is
+  // served from the device instantly — no backend round-trip, so the slow "Checking where
+  // it streams…" pass is skipped entirely. "Force refresh" (or the TTL lapsing) refetches.
+  const ckey = cacheKeyFor(p);
+  if(!force){
+    const hit = readCache(ckey);
+    if(hit && (Date.now() - hit._t) < CACHE_TTL){
+      if(mySeq !== searchSeq) return;      // a newer search started meanwhile
+      allResults = hit.results || [];
+      state.checkedAt = hit._t;
+      window.__backendDown = false;
+      doSearch._retried = false;
+      busy = false; render(false);
+      return;
+    }
+  }
+  busy = true; render(true);
   // When Rotten Tomatoes is ON (a per-person choice), the "Reading ratings" step is
   // the slow one — say so explicitly so the longer wait looks intentional, not stuck.
   const _rt = state.rtOn;
@@ -607,6 +674,11 @@ async function doSearch(){
     allResults=[...(d.results||[]), ...prev.filter(r=>!seen.has(r.tmdb_id?'m'+r.kind+r.tmdb_id:r.kind+'|'+r.title))];
     // This backend worked — remember it so the next visit just works (no setup).
     if(API){ try{ localStorage.setItem('sf_backend', API); }catch(e){} }
+    // Store the response on the device (freshness-stamped) so repeating this exact search
+    // is instant. Cache the server's own result list, not the merged `allResults` (which can
+    // carry a previous search's leftovers).
+    writeCache(ckey, d.results || []);
+    state.checkedAt = Date.now();
   }catch(e){
     if(mySeq!==searchSeq){ stopProgress=true; return; }   // superseded by a newer search
     console.warn(e);
@@ -949,6 +1021,11 @@ function render(spinner){
     </label>`}
   </div>
 
+  ${(!spinner && state.checkedAt) ? `<div class="flex items-center gap-2 mb-3 -mt-1 text-[11px]" style="color:var(--c-onmute)">
+    <span>🕒 Data ${cacheAgeLabel(state.checkedAt)}</span>
+    <button id="refreshNow" class="chip px-2 py-0.5 rounded-lg text-[11px] text-onsub" title="This device cached the last search for up to 24h — tap to fetch fresh data from the server now.">⟳ Force refresh</button>
+  </div>` : ''}
+
   <div id="grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
     ${spinner ? Array.from({length:18}).map(()=>`<div class="shimmer aspect-[2/3] rounded-2xl border border-line relative overflow-hidden"><div class="absolute bottom-0 inset-x-0 p-3 space-y-1.5"><div class="shimmer h-2 w-1/3 rounded"></div><div class="shimmer h-3 w-4/5 rounded"></div><div class="shimmer h-2 w-1/2 rounded"></div></div></div>`).join('')
       : !subs.length ? `<div class="col-span-full text-center py-16 text-onsub"><div class="text-5xl mb-3">📺</div><b class="text-onfg text-lg">Add your services to get started</b><p class="mt-2 text-sm">Tick the subscriptions you have, and the app will show you everything you can already stream — and flag anything you'd have to rent.</p><button id="openSubs" class="mt-5 bg-accent hover:bg-red-700 px-6 py-2.5 rounded-xl text-sm font-semibold">Add my services ⚙️</button></div>`
@@ -989,6 +1066,8 @@ function render(spinner){
   $('#sort')?.addEventListener('change',e=>{state.sort=e.target.value;render(false);});
   $('#maxResults')?.addEventListener('change',e=>{state.limit=parseInt(e.target.value); if(isNaN(state.limit)) state.limit=100; setLimit(state.limit); doSearch();});
   $('#maxResults').value = String(state.limit);
+  // "Force refresh": ignore the phone cache and refetch this search from the server now.
+  $('#refreshNow')?.addEventListener('click',()=>doSearch({force:true}));
   // "Load more": reveal the next batch of the already-fetched pool. Instant (local
   // slice) until the pool is exhausted — no refetch, no re-scrape.
   $('#loadMore')?.addEventListener('click',()=>{
