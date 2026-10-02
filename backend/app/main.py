@@ -75,6 +75,10 @@ _PROV_MISS_TTL = 6 * 3600
 # credits (cast/directors) per title — stable, cached so re-searches are instant.
 _CAST_CACHE: dict[tuple, tuple[float, dict]] = {}
 _CAST_TTL = 7 * 24 * 3600
+# Rotten Tomatoes scrape results (tomatometer/audience/cast/trailer). Defined HERE (not
+# down by _rt_lookup) because _persist_load() below restores it at import time.
+_RT_CACHE: dict[tuple, dict] = {}
+_RT_MISS_TTL = 60  # seconds to remember a failed lookup before retrying
 
 
 def _cached(key: tuple, ttl: int, make: callable):
@@ -332,6 +336,14 @@ _TV_GENRE_IDS = {
 }
 _GENRE_IDS = {"movie": _MOVIE_GENRE_IDS, "show": _TV_GENRE_IDS, "any": _MOVIE_GENRE_IDS}
 
+# TMDB has no real "Sports" genre — id 10753 returns 0 for both films and series, so
+# the Sport mood used to come back empty (only TVMaze tags "Sports", and TVMaze has no
+# where-to-watch data, so it vanished under a service filter). Sports titles are tagged
+# with TMDB's "sport" KEYWORD (6075) instead, so we browse that and stamp the results as
+# the Sports genre, which the normal genre filter then keeps.
+_SPORTS_GENRE_ID = 10753
+_SPORTS_KEYWORD = 6075
+
 # Inverse: TMDB genre id -> canonical name (for mapping search results, which
 # return genre_ids rather than genre objects).
 _MOVIE_NAME_BY_ID: dict[int, str] = {}
@@ -526,8 +538,7 @@ async def _rt_resolve_url(title: str, kind: str, year: int | None) -> str | None
 
 # In-memory RT cache: scraping is the expensive part, so never re-scrape a title
 # we already tried (a miss is cached too, briefly, to avoid hammering RT).
-_RT_CACHE: dict[tuple, dict] = {}
-_RT_MISS_TTL = 60  # seconds to remember a failed lookup before retrying
+# (Declared with the other caches near the top — restored from disk at import time.)
 
 
 async def _rt_lookup(title: str, year: int | None, kind: str = "movie") -> dict:
@@ -607,6 +618,12 @@ async def _tmdb_discover(kind: str, genres: list[str], year_min: int | None = No
         base[f"{dkey}.lte"] = f"{int(year_max)}-12-31"
     if english_only:
         base["with_origin_language"] = "en"
+    # "Sports" isn't a TMDB genre (see _SPORTS_GENRE_ID) — browse the sport keyword and
+    # stamp the hits as Sports below so the normal genre filter keeps them.
+    sports = _SPORTS_GENRE_ID in gids
+    if sports:
+        gids = [g for g in gids if g != _SPORTS_GENRE_ID]
+        base["with_keywords"] = str(_SPORTS_KEYWORD)
     # TMDB's `with_genres` is AND (a title must carry every listed genre), so picking
     # several genres/moods collapses the pool to near-empty. We want OR (union): pull
     # each selected genre separately, then merge + dedup. One genre -> a single query
@@ -625,6 +642,10 @@ async def _tmdb_discover(kind: str, genres: list[str], year_min: int | None = No
             log.debug("discover bucket raised %s", chunk)
             continue
         for it in chunk:
+            if sports:
+                ids = list(it.get("genre_ids") or [])
+                if _SPORTS_GENRE_ID not in ids:
+                    it["genre_ids"] = ids + [_SPORTS_GENRE_ID]
             seen.setdefault(it.get("id"), it)
     out = list(seen.values())
     if progress_id:
@@ -957,7 +978,17 @@ async def _enrich_tmdb(tmdb_id: int, kind: str, for_cast: bool = False) -> dict:
 # ---------------------------------------------------------------------------
 # Filter / sort
 # ---------------------------------------------------------------------------
-def _apply_filters(results: list[Result], q: Query) -> list[Result]:
+def _apply_filters(results: list[Result], q: Query, *, early: bool = False) -> list[Result]:
+    """Filter results.
+
+    `early=True` runs only the provider/RT-independent checks (kind, year, language,
+    genre, mood, text). It MUST run BEFORE the pool is capped and providers are looked
+    up, otherwise unrelated titles crowd the real matches out of the capped pool — e.g.
+    browsing "All" for a series-only mood (Reality TV) put the Films pool first, so the
+    top `limit` were all non-Reality films and the reality shows never got provider data.
+    The full pass (`early=False`) then applies the channel + rating filters once
+    provider/RT data has been attached.
+    """
     out, qwords, rtg = [], (q.q or "").lower().split(), (genres_for_mood(q.mood) if q.mood else [])
     for r in results:
         if q.kind != "any" and r.kind != q.kind:
@@ -971,12 +1002,6 @@ def _apply_filters(results: list[Result], q: Query) -> list[Result]:
         # prove they're foreign, and the TMDB pools are already language-filtered.
         if q.english_only and (r.language or "").lower() not in ("", "en"):
             continue
-        if q.min_rating and (r.ratings.tmdb_vote if r.ratings else None) is not None and (r.ratings.tmdb_vote or 0) < q.min_rating:
-            continue
-        if q.min_rt:
-            rt = (r.ratings.rt_tomatometer if r.ratings else None)
-            if rt is None or rt < q.min_rt:
-                continue
         if q.genres and not any(g in r.genres for g in q.genres):
             continue
         if rtg and not any(g in r.genres for g in rtg):
@@ -985,14 +1010,21 @@ def _apply_filters(results: list[Result], q: Query) -> list[Result]:
             hay = f"{r.title} {' '.join(r.cast)} {' '.join(r.directors)}".lower()
             if not all(w in hay for w in qwords):
                 continue
-        if q.channels:
-            # Compare by brand family so "Sky" also matches Sky Cinema / Showcase
-            # (the sub-brands carry their own ids). A title matches if any of its
-            # provider channels folds into one of the picked families.
-            have = {channel_family(p.get("channel")) for p in (r.platforms or []) if p.get("channel")}
-            want = {channel_family(c) for c in q.channels}
-            if not have & want:
+        if not early:
+            if q.min_rating and (r.ratings.tmdb_vote if r.ratings else None) is not None and (r.ratings.tmdb_vote or 0) < q.min_rating:
                 continue
+            if q.min_rt:
+                rt = (r.ratings.rt_tomatometer if r.ratings else None)
+                if rt is None or rt < q.min_rt:
+                    continue
+            if q.channels:
+                # Compare by brand family so "Sky" also matches Sky Cinema / Showcase
+                # (the sub-brands carry their own ids). A title matches if any of its
+                # provider channels folds into one of the picked families.
+                have = {channel_family(p.get("channel")) for p in (r.platforms or []) if p.get("channel")}
+                want = {channel_family(c) for c in q.channels}
+                if not have & want:
+                    continue
         out.append(r)
     return out
 
@@ -1292,6 +1324,13 @@ async def search(
         elif (r.ratings.tmdb_count if r.ratings and r.ratings.tmdb_count else 0) > (cur.ratings.tmdb_count if cur.ratings and cur.ratings.tmdb_count else 0):
             seen[key] = r
     results = list(seen.values())
+
+    # Filter by genre/mood/year/language/text FIRST — before the pool is capped and
+    # providers are looked up. These filters need no provider/RT data, and running them
+    # here stops unrelated titles crowding the real matches out of the capped pool
+    # (e.g. the Films pool pushing a series-only mood's shows past the cap). Also means
+    # the provider lookup below only checks titles that can actually be shown.
+    results = _apply_filters(results, q, early=True)
 
     # Cap the pool at the requested page size BEFORE the (expensive) provider
     # lookup: we only need provider data for the titles the user will actually

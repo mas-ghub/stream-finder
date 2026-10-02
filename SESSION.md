@@ -1,11 +1,45 @@
 # Stream Finder — dev handover (SESSION)
 
 Working notes so we can pick up where we left off. Not user-facing (that's README.md).
-Last updated: v1.64 — Sky channel browsing (family grouping, Sky Go → "Sky", scoped where-to-watch).
+Last updated: v1.80 — genre/mood filter fix (Films pool no longer crowds out Series matches), Sport mood works, cache-boot crash fixed.
 
 ## FUTURE IDEA (user, not now): host without depending on the Mac staying on/awake/logged in (e.g. always-on hosting). Mac currently needs: plugged in, lid open, logged in. `sudo pmset -c sleep 0` applied (display sleep still 10 min).
 
-## v1.64 (current): "Where to watch" scoped to the channel + Sky Go relabelled "Sky"
+## v1.80 (current): genre/mood filter fix + Sport works + cache-boot crash
+User: "the genre selection isn't working", and a step that "takes ages … checking something" (the
+provider pass). Note: the UI's genre selector **is** the **Mood** chips (there is no separate
+genre row; `state.genres` exists but nothing populates it) — so "genre selection" = the moods.
+
+**1. The real bug — genre matches were capped away (backend `main.py search()`).** For `kind=any`
+(All) the **Films** pool is ordered *before* the Series pool, and the pool was truncated/limited to
+the top `limit` **before** the genre filter ran. So for a series-heavy mood the top `limit` were all
+non-matching films; the series that *did* match sat deeper, never got provider data, and the channel
+filter dropped them → **Reality TV and Sport returned 0** with the default Netflix lens (the default
+lens always sets channels, so the provider cap applied).
+- **Fix:** `_apply_filters(..., early=True)` — a new early pass running only the **provider/RT-
+  independent** checks (kind, year, language, genre, mood, text) — is called right after dedup,
+  **before** the page cap and the provider lookup. The full pass (channels + min-RT/min-rating, which
+  need provider/RT data) still runs later unchanged. Genre/mood matches can no longer be crowded out,
+  and the provider step now only checks titles that can actually be shown (fewer ticks).
+- Verified: **Reality TV + Netflix 0 → 9**, and every mood now filters correctly at `kind=any`.
+
+**2. Sport mood had no TMDB source.** TMDB has **no Sports genre** — id 10753 returns 0 results for
+*both* film and TV (`/genre/tv/list` has none). So Sport only ever matched TVMaze titles, which carry
+no where-to-watch data → it vanished under any service filter. Fix: `_tmdb_discover` now detects the
+Sports genre and browses TMDB's **"sport" keyword (6075)** instead, then stamps the hits with genre
+id 10753 so the normal genre filter keeps them. Verified: **Sport + Netflix 0 → 28** (Hustle,
+Icarus, I, Tonya, The Blind Side…).
+
+**3. Cache-boot crash (found while restarting).** `_RT_CACHE` was declared *below* the import-time
+`_persist_load()`, so a restart with RT entries in the persisted cache crashed with
+`NameError: _RT_CACHE` → the backend stayed **down**. Moved `_RT_CACHE`/`_RT_MISS_TTL` up with the
+other caches. (Latent since the disk cache was added — any warm restart could have hit it.)
+
+- **Deploy:** backend-only fix (+ the version bump). Mac backends picked it up on
+  `launchctl kickstart -k gui/$(id -u)/com.masparrow.stream-finder.lan`; **Render needs a manual
+  deploy** for the public Pages site to get it. `APP_VERSION` → **1.80**; `sw.js` → `sf-shell-v52`.
+
+## v1.64: "Where to watch" scoped to the channel + Sky Go relabelled "Sky"
 Two user fixes for the Sky browse:
 - **Sky Go → "Sky".** 139 (Sky Go) is a mobile *app*, not a channel. Relabelled "Sky" across
   the board: backend `PROVIDER_ID_NAMES[139]`→"Sky", `PROVIDER_NAMES['sky go']`→"Sky",
