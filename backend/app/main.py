@@ -592,19 +592,48 @@ async def _tmdb_discover_pages(path: str, params: dict[str, str], max_titles: in
         p["with_origin_language"] = "en"
     out: list[dict] = []
     pages = min((max_titles + 19) // 20, 30)  # 20 per page, cap ~600
-    for page in range(1, pages + 1):
-        r = await _tmdb_get(f"{TMDB_BASE}/{path}", {**p, "page": page})
-        if r.status_code == 401:
-            return []
-        r.raise_for_status()
-        data = r.json()
-        batch = data.get("results", [])
-        out.extend(batch)
-        if progress_id:
-            _progress(progress_id, phase="pulled", done=len(out), total=max_titles)
-        if len(out) >= max_titles or page >= data.get("total_pages", 1) or not batch:
-            break
-    return out
+    # Page 1 alone first: it tells us total_pages (so we never fetch beyond the
+    # result set) and doubles as the 401 short-circuit (key check).
+    r = await _tmdb_get(f"{TMDB_BASE}/{path}", {**p, "page": 1})
+    if r.status_code == 401:
+        return []
+    r.raise_for_status()
+    data = r.json()
+    batch = data.get("results", [])
+    out.extend(batch)
+    if progress_id:
+        _progress(progress_id, phase="pulled", done=len(out), total=max_titles)
+    if len(out) >= max_titles or not batch:
+        return out[:max_titles]
+    # Remaining pages IN PARALLEL (bounded burst), not one at a time. Sequential
+    # paging was the slowest part of a browse: each bucket waited a whole TMDB
+    # round-trip per page (up to 13 rounds), so a 3-genre mood stacked ~13 × TMDB
+    # latency before the provider check even started. Browsing 6 at a time keeps
+    # the concurrent burst modest while a bucket finishes in ~2 rounds.
+    total_pages = min(data.get("total_pages", 1), pages)
+    sem = asyncio.Semaphore(6)
+
+    async def grab(pg: int) -> list[dict]:
+        async with sem:
+            rr = await _tmdb_get(f"{TMDB_BASE}/{path}", {**p, "page": pg})
+            if rr.status_code == 401:
+                return []
+            if rr.status_code in (429, 500, 502, 503):
+                await asyncio.sleep(0.6)  # brief backoff, one retry
+                rr = await _tmdb_get(f"{TMDB_BASE}/{path}", {**p, "page": pg})
+            rr.raise_for_status()
+            return rr.json().get("results", [])
+
+    chunks = await asyncio.gather(*(grab(pg) for pg in range(2, total_pages + 1)),
+                                  return_exceptions=True)
+    for c in chunks:
+        if isinstance(c, Exception):
+            log.debug("discover page raised %s", c)
+            continue
+        out.extend(c)
+    if progress_id:
+        _progress(progress_id, phase="pulled", done=min(len(out), max_titles), total=max_titles)
+    return out[:max_titles]
 
 
 async def _tmdb_discover(kind: str, genres: list[str], year_min: int | None = None, year_max: int | None = None, max_titles: int = 120, origin_country: str | None = None, channels: list[str] | None = None, progress_id: str | None = None, english_only: bool = False) -> list[dict]:

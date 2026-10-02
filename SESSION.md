@@ -965,3 +965,24 @@ Goal: host the FastAPI backend on a free always-on host so the app works when th
 - Verified live: /api/meta 200; search bridgerton (kind=show) 3; Netflix+where browse 8 with
   providers (names+channels map correctly); RT/TVMaze/TMDB outbound all 200 from Render.
 - Mac setup untouched (launchd, Funnel :10000, 8443) — still works; Render is the 3rd fallback.
+
+## v1.82 — browse costs match what's displayed (fixes the "couldn't reach the results server")
+
+**Symptom:** a service-lens browse (e.g. max results = 100) reported "couldn't reach the
+results server" after a long "Checking where it streams…" — the request overran Render's
+free-tier limits. Measurements: the same heavy browse on the Mac backend finished (200) but
+Render returned 0 bytes/502. Render's `/api/meta` stayed 200 the whole time, so the service
+itself was fine — one request was just too heavy.
+
+**Cause:** `frontend/index.html` always sent `limit = max(state.limit, 300)` (v1.52: so local
+re-sorts were exact). With the service lens, the backend provider-checks EVERY member of that
+pool, then Rotten-Tomatoes-scrapes every survivor and cast-enriches the page. A 100-card
+browse therefore did ~300 provider lookups + ~150-200 RT scrapes + cast for ~200, to display
+100 cards. The extra depth is real (more service hits) but is what made the browse slow and
+what time-outs on the free tier.
+
+**Fix (frontend-only):** when the browse is service-scoped (`myCh.length && !state.q`),
+request exactly `state.limit`; plain text searches and non-service searches keep the wider
+300 pool (no provider calls there, and exact re-sorts stay exact). Bump "Max results" for a
+deeper browse — that's the new depth knob for service searches.
+

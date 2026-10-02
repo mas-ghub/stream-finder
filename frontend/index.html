@@ -335,7 +335,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.81';
+const APP_VERSION = '1.82';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, checkedAt:null };
@@ -583,8 +583,13 @@ async function doSearch(opts){
   if(myCh.length && !state.q) p.set('fetch_all', 'true');
   // "All" (limit 0) = no local cap: ask the backend for its full pool (1000). A
   // specific number = fetch at least that many (so local re-sort is exact) and cap
-  // the display to it.
-  p.set('limit', state.limit===0 ? 1000 : Math.max(state.limit, 300));
+  // the display to it. When the browse is service-scoped, the backend provider-checks
+  // every title in that pool — so the pool size IS the cost. With a lens on we ask
+  // only for what will be displayed (a 100-card browse provider-checks 100 titles,
+  // not 300) so it stays fast and off Render's free-tier limits; plain text searches
+  // and non-service searches keep the wider pool — there the extra titles cost no
+  // provider calls and give exact local re-sorts.
+  p.set('limit', state.limit===0 ? 1000 : (myCh.length && !state.q ? state.limit : Math.max(state.limit, 300)));
   // "where=true" asks the backend to return provider data for every result so we
   // can filter/annotate on the client. Widens the pool so filters have enough.
   const where = state.streamOnly || state.freeOnly || myCh.length>0;
