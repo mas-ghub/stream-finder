@@ -43,11 +43,10 @@ class Settings(BaseSettings):
     # free Render instance; raise on a bigger plan (e.g. 3000) for deeper results.
     fetch_all_pool: int = 1500
 
-    # Cap on how many titles ONE request may provider-check. "All" + a service lens
-    # used to scan the whole ~1000-title pool in a single request, which the free
-    # tier times out (the app then says "couldn't reach the results server"). 600
-    # keeps the scan inside one request; raise via SF_MAX_PROVIDERS on a bigger plan.
-    max_providers: int = 600
+    # Cap on how many titles ONE request may provider-check. The free tier (Render)
+    # gets only a handful of TMDB ops/sec and kills long requests, so any browse must
+    # fit its whole scan in one request. Raise via SF_MAX_PROVIDERS on a bigger plan.
+    max_providers: int = 200
 
 
 settings = Settings()

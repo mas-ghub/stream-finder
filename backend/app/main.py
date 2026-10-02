@@ -1316,15 +1316,16 @@ async def search(
     # so skip TVMaze (it has no where-to-watch) to keep results meaningful.
     tmdb_only = bool(q.channels)
     # Service pre-filter: TMDB's discover can filter by watch provider itself
-    # (with_watch_provider, free) — the pool then only contains titles on the picked
+    # (with_watch_providers, free) — the pool then only contains titles on the picked
     # services, and the expensive per-title provider scan is only needed for the
-    # chips on displayed cards, not to build the result set. Only possible when
-    # EVERY picked channel has known provider ids (free-to-air has none).
+    # chips on displayed cards, not to build the result set.
     prov_ids = provider_ids_for(q.channels) if (q.channels and tmdb_on) else []
     # (Only the DISCOVER browse can carry the provider pre-filter — a text search
     # uses _tmdb_search, which has no such filter, so it keeps the scan+filter path.)
-    prefiltered = bool(q.channels) and bool(prov_ids) and not q.q \
-        and all(PROVIDER_IDS.get(c) for c in q.channels)
+    # Channels TMDB doesn't track in GB (Channel 5) have no ids and can never appear
+    # in any title's platforms, so they neither help nor hurt the pre-filter — the
+    # lens of "my 11 services" prefilters over the 10 that have ids.
+    prefiltered = bool(q.channels) and bool(prov_ids) and not q.q
     tasks: list[tuple] = []
     if q.q:
         if tmdb_on:
@@ -1356,9 +1357,10 @@ async def search(
             # Service browses cap the pull: non-prefiltered, only the top of the pool
             # can be provider-checked (2× the provider cap); prefiltered, everything
             # TMDB returns is on the picked services, but each card still needs its
-            # chips attached, so the pool (and with it the cost) stays bounded at 300.
+            # chips attached, so the pool (and with it the cost) stays bounded at 200
+            # — the whole request must fit inside the free host's kill window.
             if q.channels:
-                base_pool = min(base_pool, 300 if prefiltered else max(2 * settings.max_providers, 300))
+                base_pool = min(base_pool, 200 if prefiltered else max(2 * settings.max_providers, 300))
             max_t = base_pool // len(dks)
             for dk in dks:
                 tasks.append(("tmdb", dk, _tmdb_discover(dk, q.genres, year_min, year_max, max_t, oc, q.channels, pid, q.english_only, prov_ids)))

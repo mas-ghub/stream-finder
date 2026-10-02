@@ -167,8 +167,8 @@ PROVIDER_IDS: dict[str, list[int]] = {
     "sky": [138, 140, 141, 130, 591, 136, 137, 139],
     "itvx": [60, 133, 134, 135, 2300],
     "bbc": [38, 39, 528],
-    "channel4": [],   # free-to-air; surfaced via the per-title provider pass, not discover
-    "channel5": [],   # free-to-air; surfaced via the per-title provider pass, not discover
+    "channel4": [103],  # TMDB GB provider "Channel 4" — enables provider pre-filtering
+    "channel5": [],     # not tracked by TMDB in GB at all (never appears in platforms)
     "britbox": [34, 33],
     "acorn": [26],
     "mubi": [25, 11, 201],

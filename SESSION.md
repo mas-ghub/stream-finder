@@ -1064,6 +1064,22 @@ relaxed 150 → 30 (a 64-title pool would otherwise shrink to 27).
 LESSON: when TMDB returns results that look unfiltered, diff the total_results against the
 same query without the new param — a misnamed param is silent.
 
+## v1.85 addendum — the whole-household lens prefilters too (budget fits the kill window)
+
+The user's default browse looks through ALL their services (the 11-service household lens).
+Two problems found by reproducing their exact request:
+1. Channel 4/5 had no TMDB provider ids → `all(PROVIDER_IDS...)` failed → the whole lens
+   fell back to the heavy scan path → timeout → "couldn't reach the results server" AGAIN.
+   Fixed: Channel 4 IS in TMDB GB (provider id 103, added); Channel 5 is not tracked by
+   TMDB at all, so it never appeared in any title's platforms anyway — id-less channels
+   neither help nor hurt the pre-filter, and the lens prefilters over the rest.
+2. Budget: provider-filtered pool cap 300 → 200, scan cap (max_providers) 250 → 200, so the
+   whole request fits inside the free host's kill window with margin.
+
+Verified locally with the exact 11-channel request: All browse 199 titles HTTP 200;
+Horror + Netflix still 100/100 Netflix.
+
+
 
 
 
