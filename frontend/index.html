@@ -335,7 +335,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.87';
+const APP_VERSION = '1.88';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, total:0, loadingMore:false, checkedAt:null };
@@ -445,7 +445,7 @@ function cacheKeyFor(params){
   return CACHE_PREFIX + q.toString();
 }
 function readCache(key){
-  try{ const o = JSON.parse(localStorage.getItem(key) || 'null'); return (o && o._t && Array.isArray(o.results)) ? o : null; }
+  try{ const o = JSON.parse(localStorage.getItem(key) || 'null'); return (o && o._t && Array.isArray(o.results) && o.total > 0) ? o : null; }   // entries without a server total (pre-paging) are ignored
   catch(e){ return null; }
 }
 function cacheKeys(){
@@ -458,8 +458,8 @@ function pruneCache(){
   ks.sort((a,b)=>((readCache(a)||{})._t||0)-((readCache(b)||{})._t||0));  // oldest first
   ks.slice(0, ks.length-CACHE_MAX).forEach(k=>{ try{ localStorage.removeItem(k); }catch(e){} });
 }
-function writeCache(key, results){
-  const blob = JSON.stringify({ _t: Date.now(), results: results || [] });
+function writeCache(key, results, total){
+  const blob = JSON.stringify({ _t: Date.now(), results: results || [], total: total || (results||[]).length });
   if(blob.length > CACHE_MAX_BYTES) return;   // too big to store safely — skip
   try{ localStorage.setItem(key, blob); pruneCache(); }
   catch(e){                                   // quota error → drop the oldest entry, retry once
@@ -618,6 +618,7 @@ async function doSearch(opts){
     if(hit && (Date.now() - hit._t) < CACHE_TTL){
       if(mySeq !== searchSeq) return;      // a newer search started meanwhile
       allResults = hit.results || [];
+      state.total = hit.total || allResults.length;   // so Load more still knows the server has more pages
       state.checkedAt = hit._t;
       window.__backendDown = false;
       doSearch._retried = false;
@@ -692,7 +693,7 @@ async function doSearch(opts){
     // Store the response on the device (freshness-stamped) so repeating this exact search
     // is instant. Cache the server's own result list, not the merged `allResults` (which can
     // carry a previous search's leftovers) — page fetches store the accumulated list.
-    writeCache(ckey, pageOffset ? (allResults || []) : (d.results || []));
+    writeCache(ckey, pageOffset ? (allResults || []) : (d.results || []), state.total);
     state.checkedAt = Date.now();
   }catch(e){
     if(mySeq!==searchSeq){ stopProgress=true; return; }   // superseded by a newer search
