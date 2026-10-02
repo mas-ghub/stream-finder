@@ -1006,4 +1006,32 @@ ping was green the whole time, so it wasn't a sleep).
 - TMDB discover (previous commit) fetches each bucket's remaining pages in a bounded parallel
   burst instead of one round-trip at a time.
 
+## v1.84 (backend) — TMDB filters by service server-side (`with_watch_provider`)
+
+The big one. `channels.py` has carried `PROVIDER_IDS` (channel → TMDB flatrate provider ids)
+and `provider_ids_for()` for ages with a comment saying they exist "so the discover
+`with_watch_provider` filter matches" — but `_tmdb_discover` never actually sent the filter,
+so the app kept brute-forcing service filtering by per-title provider scans (the
+"Checking where it streams… N/998" pass, and the whole 502 saga).
+
+**Now wired up:** a service browse adds `with_watch_provider=<ids>&watch_region=GB` to every
+discover query. TMDB returns ONLY titles on the picked services, so:
+- the giant provider scan is gone for subscription services — the pool IS the answer set;
+- mood browses finally show the real catalogue (Horror + Netflix: **100** titles, was 2-13
+  with scan-based filtering; All + Netflix: **300** titles, 150 films + 150 series);
+- the only per-title work left is attaching platform chips to displayed cards (finishing
+  phase, streamed to the screen as they land).
+- Max results = **All** no longer means "check 998 titles" — the pool is capped at 300
+  (150/kind) and every one of them is displayable, so nothing is wasted.
+
+Fallbacks kept intact: text searches (no discover → scan path), free-to-air channels
+(Channel 4/5 have no TMDB provider ids → scan path), and any multi-pick including a
+free-to-air channel. `channels_prefiltered` flag stops `_apply_filters` re-checking
+platforms that aren't attached yet (the pool is already exactly the picked services).
+
+Data notes: TMDB's TV genre list has NO Horror (only movies) — that's why a Horror mood
+returns films only; same was true before. And the local 429-heavy test runs leave some
+provider misses cached ~6h — chips fill in on later browses.
+
+
 

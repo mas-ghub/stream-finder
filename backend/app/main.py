@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from .channels import UK_ONLY, all_channels, channel_for, channel_family, channel_meta
+from .channels import UK_ONLY, all_channels, channel_for, channel_family, channel_meta, provider_ids_for, PROVIDER_IDS
 from .config import settings
 from .genres import MOODS, genres_for_mood, normalize_genre, normalize_genres
 from .models import Ratings, Result
@@ -636,11 +636,17 @@ async def _tmdb_discover_pages(path: str, params: dict[str, str], max_titles: in
     return out[:max_titles]
 
 
-async def _tmdb_discover(kind: str, genres: list[str], year_min: int | None = None, year_max: int | None = None, max_titles: int = 120, origin_country: str | None = None, channels: list[str] | None = None, progress_id: str | None = None, english_only: bool = False) -> list[dict]:
+async def _tmdb_discover(kind: str, genres: list[str], year_min: int | None = None, year_max: int | None = None, max_titles: int = 120, origin_country: str | None = None, channels: list[str] | None = None, progress_id: str | None = None, english_only: bool = False, prov_ids: list[int] | None = None) -> list[dict]:
     gids = sorted({_GENRE_IDS[kind].get(normalize_genre(g) or g) for g in genres} - {None})
     path = "discover/movie" if kind == "movie" else "discover/tv"
     dkey = "primary_release_date" if kind == "movie" else "first_air_date"
     base: dict[str, str] = {"sort_by": "vote_average.desc", "vote_count.gte": "150", f"{dkey}.gte": "1950-01-01"}
+    if prov_ids:
+        # Let TMDB filter by service server-side (free, exact): the pool COMES BACK
+        # as "titles on these services", so no per-title provider scan is needed to
+        # build the result set — only the displayed cards need their chips attached.
+        base["with_watch_provider"] = "|".join(str(int(i)) for i in prov_ids)
+        base["watch_region"] = "GB"
     if year_min:
         base[f"{dkey}.gte"] = f"{int(year_min)}-01-01"
     if year_max:
@@ -1014,7 +1020,7 @@ async def _enrich_tmdb(tmdb_id: int, kind: str, for_cast: bool = False) -> dict:
 # ---------------------------------------------------------------------------
 # Filter / sort
 # ---------------------------------------------------------------------------
-def _apply_filters(results: list[Result], q: Query, *, early: bool = False) -> list[Result]:
+def _apply_filters(results: list[Result], q: Query, *, early: bool = False, channels_prefiltered: bool = False) -> list[Result]:
     """Filter results.
 
     `early=True` runs only the provider/RT-independent checks (kind, year, language,
@@ -1053,7 +1059,7 @@ def _apply_filters(results: list[Result], q: Query, *, early: bool = False) -> l
                 rt = (r.ratings.rt_tomatometer if r.ratings else None)
                 if rt is None or rt < q.min_rt:
                     continue
-            if q.channels:
+            if q.channels and not channels_prefiltered:
                 # Compare by brand family so "Sky" also matches Sky Cinema / Showcase
                 # (the sub-brands carry their own ids). A title matches if any of its
                 # provider channels folds into one of the picked families.
@@ -1294,6 +1300,15 @@ async def search(
     # When the user picks a specific service, only TMDB carries provider data,
     # so skip TVMaze (it has no where-to-watch) to keep results meaningful.
     tmdb_only = bool(q.channels)
+    # Service pre-filter: TMDB's discover can filter by watch provider itself
+    # (with_watch_provider, free) — the pool then only contains titles on the picked
+    # services, and the expensive per-title provider scan is only needed for the
+    # chips on displayed cards, not to build the result set. Only possible when
+    # EVERY picked channel has known provider ids (free-to-air has none).
+    prov_ids = provider_ids_for(q.channels) if (q.channels and tmdb_on) else []
+    # (Only the DISCOVER browse can carry the provider pre-filter — a text search
+    # uses _tmdb_search, which has no such filter, so it keeps the scan+filter path.)
+    prefiltered = bool(q.channels) and bool(prov_ids) and not q.q and all(PROVIDER_IDS.get(c) for c in q.channels)
     tasks: list[tuple] = []
     if q.q:
         if tmdb_on:
@@ -1322,9 +1337,15 @@ async def search(
             base_pool = 1000 if q.channels else (200 if q.where else 120)
             if q.fetch_all and q.pool:
                 base_pool = min(max(q.pool, 200), settings.fetch_all_pool)
+            # Service browses cap the pull: non-prefiltered, only the top of the pool
+            # can be provider-checked (2× the provider cap); prefiltered, everything
+            # TMDB returns is on the picked services, but each card still needs its
+            # chips attached, so the pool (and with it the cost) stays bounded at 300.
+            if q.channels:
+                base_pool = min(base_pool, 300 if prefiltered else max(2 * settings.max_providers, 300))
             max_t = base_pool // len(dks)
             for dk in dks:
-                tasks.append(("tmdb", dk, _tmdb_discover(dk, q.genres, year_min, year_max, max_t, oc, q.channels, pid, q.english_only)))
+                tasks.append(("tmdb", dk, _tmdb_discover(dk, q.genres, year_min, year_max, max_t, oc, q.channels, pid, q.english_only, prov_ids)))
         if not tmdb_only and not q.english_only:
             # English-only browse: TVMaze has no language filter and its discover is
             # unfiltered, so it would dilute the pool — use the (language-filtered)
@@ -1332,12 +1353,23 @@ async def search(
             tasks.append(("tvmaze", None, _tvmaze_discover()))
 
     batched = await asyncio.gather(*(coro for _, _, coro in tasks), return_exceptions=True)
-    for (source, kkind, _), chunk in zip(tasks, batched):
-        if isinstance(chunk, Exception):
-            log.debug("source %s raised %s", source, chunk)
-            continue
-        for it in chunk:
-            results.append(_map_tmdb(it, kkind) if source == "tmdb" else _map_tvmaze(it))
+    # Interleave the sources round-robin instead of appending each pool whole. The
+    # provider scan only checks the TOP of `results`, and movies-before-shows meant a
+    # small scan (a mood browse at Max results = 100) probed films only and the shows
+    # side never got checked. Interleaved, any prefix mixes both kinds, so the cap
+    # spreads across films AND series.
+    streams = [[_map_tmdb(it, kkind) if source == "tmdb" else _map_tvmaze(it) for it in chunk]
+               for (source, kkind, _), chunk in zip(tasks, batched) if not isinstance(chunk, Exception)]
+    i = 0
+    while True:
+        added = False
+        for s in streams:
+            if i < len(s):
+                results.append(s[i])
+                added = True
+        if not added:
+            break
+        i += 1
     if pid:
         _progress(pid, phase="pulled", done=len(results), total=len(results))
 
@@ -1388,17 +1420,20 @@ async def search(
         results = _sort(results, q)[:limit]
 
     # Channel filter needs provider data, so attach it (in parallel) BEFORE the
-    # other filters run. Otherwise the RT/min-rating filters (which drop titles
-    # with no rating yet) would shrink the pool before the channel filter sees it.
-    if q.channels and settings.tmdb_enabled and (tmdb_key() or tmdb_v4_key()):
-        # Only the top `limit` of the (service-pre-filtered, popularity-sorted) pool
-        # actually survive to the page, so only THOSE need provider data. Capping here
-        # (instead of scanning the whole ~1000 pool) is the main cold-start win: a
-        # 50-result Netflix browse fetches ~50 provider lookups, not ~500. An "All"
-        # size (limit 0) scans the pool too, but capped at max_providers — scanning
-        # ~1000 titles in one request is what time-outs the free tier, and the
-        # provider cache makes the next browse (or a re-sort) free.
-        prov_limit = limit if limit > 0 else min(len(results), settings.max_providers)
+    # other filters run — UNLESS TMDB already pre-filtered the pool by provider
+    # (with_watch_provider), in which case every pool member is on a picked service
+    # and the per-title scan is only ever needed for the displayed cards' chips.
+    if q.channels and not prefiltered and settings.tmdb_enabled and (tmdb_key() or tmdb_v4_key()):
+        # Only the top of the (service-pre-filtered, popularity-sorted) pool actually
+        # survives to the page, so only THOSE need provider data. Capping here (instead
+        # of scanning the whole ~1000 pool) is the main cold-start win: a 50-result
+        # Netflix browse fetches ~50 provider lookups, not ~500.
+        # Cap EVERY request at max_providers provider checks — not just "All" (the
+        # client sends limit=1000 for an "All" browse, so keying the cap on limit==0
+        # would never fire). Bigger limit = deeper pool, but the scan must still fit
+        # inside one request on the free tier; the provider cache makes the next
+        # browse or re-sort free.
+        prov_limit = min(limit or len(results), settings.max_providers)
         prov_target = results[:prov_limit]
         if pid:
             _progress(pid, phase="providers", done=0, total=len(prov_target))
@@ -1420,21 +1455,22 @@ async def search(
                 _progress(pid, phase="ratings", done=0, total=min(len(pool), 200))
             await _gather_bounded([_attach_rt(r) for r in pool[:200] if r.title], 10,
                                   progress_key=pid, progress_phase="ratings", progress_total=min(len(pool), 200))
-        pool = _apply_filters(pool, q)
+        pool = _apply_filters(pool, q, channels_prefiltered=prefiltered)
     else:
         # Everything else (service filter, mood, year, genre, text) is pre-filtered
         # and provider-checked, so a single filter pass is exact.
-        pool = _apply_filters(results, q)
-    # RT for everything that survived, capped at 200: RT is a per-title scrape (the
+        pool = _apply_filters(results, q, channels_prefiltered=prefiltered)
+    # RT for everything that survived, capped at 100: RT is a per-title scrape (the
     # slowest call we make) and an "All"-size service browse can leave a few hundred
-    # survivors — an uncapped pass here is minutes on the free tier. The cache makes
-    # repeats free. Skipped entirely when the client turned Rotten Tomatoes off
-    # (rt_off) — that's the slow step.
+    # survivors — an uncapped pass here alone is minutes on the free tier. Cards
+    # beyond the cap simply show no rating until a later browse caches them. The
+    # cache makes repeats free. Skipped entirely when the client turned Rotten
+    # Tomatoes off (rt_off) — that's the slow step.
     if settings.rt_enabled and not q.rt_off:
-        rt_pool = pool[:200]
+        rt_pool = pool[:100]
         if pid:
             _progress(pid, phase="ratings", done=0, total=len(rt_pool))
-        # 16-way: an All-size browse RT-scrapes up to 200 titles; at the old 10-way
+        # 16-way: an All-size browse RT-scrapes up to 100 titles; at the old 10-way
         # that alone was a minute-plus on the free host. The cache makes repeats free.
         await _gather_bounded([_attach_rt(r) for r in rt_pool if r.title], 16,
                               progress_key=pid, progress_phase="ratings", progress_total=len(rt_pool))
@@ -1455,10 +1491,21 @@ async def search(
         # results=filtered exposes a growing snapshot (partial_results) on the
         # progress channel, so the client can render each card as its cast and
         # where-to-watch data land — no need to wait for the whole batch.
-        await _gather_bounded(
-            [asyncio.gather(*([_attach_providers(r)] if need_providers else []) + [_attach_cast(r)])
-             for r in filtered],
-            16, progress_key=pid, progress_phase="finishing", progress_total=len(filtered), results=filtered)
+        if len(filtered) > 80:
+            # Big page (an "All" browse): the grid never shows cast — the detail view
+            # refetches it on tap via /api/enrich — so fetching full credits for every
+            # card here is the single biggest cost of a big browse for data nobody
+            # sees. Cards already streamed in during the provider scan above; just
+            # fill any provider gaps (the channel path pre-attached them, so this is
+            # usually a no-op) and let the detail view handle cast on demand.
+            await _gather_bounded(
+                [_attach_providers(r) for r in filtered if need_providers and not (r.platforms or [])],
+                16, progress_key=pid, progress_phase="finishing", progress_total=len(filtered), results=filtered)
+        else:
+            await _gather_bounded(
+                [asyncio.gather(*([_attach_providers(r)] if need_providers else []) + [_attach_cast(r)])
+                 for r in filtered],
+                16, progress_key=pid, progress_phase="finishing", progress_total=len(filtered), results=filtered)
     # "Free" (the user's meaning) = included in a service you already pay for, i.e. it
     # costs nothing *extra*. Kept when the title is on one of the user's ticked
     # subscriptions (any channel type — a free-to-air service you "have" also counts)
