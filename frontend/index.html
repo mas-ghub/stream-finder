@@ -335,7 +335,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.94';
+const APP_VERSION = '1.95';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, total:0, loadingMore:false, checkedAt:null };
@@ -998,7 +998,7 @@ function render(spinner){
   // oldest titles live past the page the backend sliced, so a pre-sorted first 100
   // would never surface them.) "Max results" then caps only the display; re-sorts
   // are instant local reshuffles of the stored set (no refetch).
-   const sorted = sortResults(shown, state.sort);
+   const sorted = shown;   // server order (already sorted across the whole result set)
    // The pool we can page through: the full ranked/filtered set, capped to the
    // "Max results" setting (0 = All → no cap). This is the "total" for Load-more.
    const poolCap = state.limit || Infinity;
@@ -1136,7 +1136,9 @@ function render(spinner){
   $('#clear').addEventListener('click',()=>{ state={...state,q:'',moods:[],channels:[],yearMin:'',yearMax:'',minRating:0,minRt:0,sort:'relevance',streamOnly:false,freeOnly:false,englishOnly:false}; state.limit=100; setLimit(100); setChannels(['netflix']); myServicesOn=false; state.channels=['netflix']; render(false); doSearch(); });
   $('#ymin')?.addEventListener('change',e=>{state.yearMin=e.target.value;doSearch();});
   $('#ymax')?.addEventListener('change',e=>{state.yearMax=e.target.value;doSearch();});
-  $('#sort')?.addEventListener('change',e=>{state.sort=e.target.value;render(false);});
+  // The server returns every page in the chosen order across the WHOLE result set, so a
+  // sort change refetches from page 1 (cached per sort) instead of re-sorting what's loaded.
+  $('#sort')?.addEventListener('change',e=>{state.sort=e.target.value;doSearch();});
   // "Force refresh": ignore the phone cache and refetch this search from the server now.
   $('#refreshNow')?.addEventListener('click',()=>doSearch({force:true}));
   // "Load more": reveal the next batch of the already-fetched pool (instant, local);

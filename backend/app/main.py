@@ -1382,12 +1382,46 @@ async def _serve_page(q, ordered: list, pid: str | None) -> dict:
 _TOTALS_CACHE: dict[str, tuple[float, int]] = {}
 _TOTALS_TTL = 15 * 60
 _TMDB_MAX_PAGE = 500          # TMDB refuses pages beyond this (10,000 results)
+_CURSORS: dict[str, tuple[float, dict[str, int]]] = {}
+_CURSOR_TTL = 30 * 60
+_CURSOR_MAX = 300
+
+
+def _browse_sort_key(sort: str):
+    """Key over a raw TMDB discover item matching TMDB's own sort_by for `sort`."""
+    def date(it): return it.get("release_date") or it.get("first_air_date") or ""
+    def title(it): return (it.get("original_title") or it.get("original_name") or "").lower()
+    if sort in ("rating", "tmdb"):
+        return lambda it: (-(it.get("vote_average") or 0), -(it.get("popularity") or 0))
+    if sort == "votes":
+        return lambda it: (-(it.get("vote_count") or 0), -(it.get("popularity") or 0))
+    if sort == "newest":
+        return lambda it: (tuple(-ord(c) for c in date(it)) or (0,), -(it.get("popularity") or 0))
+    if sort == "oldest":
+        return lambda it: (date(it) or "9999", -(it.get("popularity") or 0))
+    if sort == "title":
+        return lambda it: (title(it),)
+    return lambda it: (-(it.get("popularity") or 0),)
+
+
+# App sort -> TMDB discover sort_by (movie, tv). Rating sorts also need a vote floor, or
+# the top is full of obscure titles with a perfect score from a handful of votes.
+_TMDB_SORTS: dict[str, tuple[str, str]] = {
+    "relevance": ("popularity.desc", "popularity.desc"),
+    "rating": ("vote_average.desc", "vote_average.desc"),
+    "tmdb": ("vote_average.desc", "vote_average.desc"),
+    "votes": ("vote_count.desc", "vote_count.desc"),
+    "newest": ("primary_release_date.desc", "first_air_date.desc"),
+    "oldest": ("primary_release_date.asc", "first_air_date.asc"),
+    "title": ("original_title.asc", "original_name.asc"),
+}
+_RATING_VOTE_FLOOR = {"movie": "200", "show": "100"}
 
 
 def _can_true_page(q: Query, prov_ids: list[int], tmdb_on: bool) -> bool:
     if not (tmdb_on and prov_ids and q.channels and not q.q):
         return False
-    if q.sort != "relevance" or q.min_rt or q.min_rating or q.free_only:
+    if q.sort not in _TMDB_SORTS or q.min_rt or q.min_rating or q.free_only:
         return False        # these need data a discover page doesn't have -> old capped path
     names = list(q.genres) + (genres_for_mood(q.mood) if q.mood else [])
     gids = {_GENRE_IDS["movie"].get(normalize_genre(g) or g) for g in names}
@@ -1399,9 +1433,12 @@ def _can_true_page(q: Query, prov_ids: list[int], tmdb_on: bool) -> bool:
 def _browse_params(q: Query, kind: str, prov_ids: list[int]) -> dict[str, str] | None:
     """TMDB discover params for one kind, or None if this kind can't match the genres."""
     dkey = "primary_release_date" if kind == "movie" else "first_air_date"
-    p: dict[str, str] = {"sort_by": "popularity.desc", f"{dkey}.gte": "1950-01-01",
+    sort_by = _TMDB_SORTS.get(q.sort, _TMDB_SORTS["relevance"])[0 if kind == "movie" else 1]
+    p: dict[str, str] = {"sort_by": sort_by, f"{dkey}.gte": "1950-01-01",
                          "with_watch_providers": "|".join(str(int(i)) for i in prov_ids),
                          "watch_region": "GB"}
+    if q.sort in ("rating", "tmdb"):
+        p["vote_count.gte"] = _RATING_VOTE_FLOOR[kind]
     if q.year_min:
         p[f"{dkey}.gte"] = f"{int(q.year_min)}-01-01"
     if q.year_max:
@@ -1472,38 +1509,57 @@ async def _browse_page(q: Query, prov_ids: list[int], pid: str | None) -> dict:
     grand = sum(totals.values())
     if pid:
         _progress(pid, phase="pulled", done=0, total=limit)
-    # Each kind contributes its proportional share of this page, so every kind is
-    # exhausted on the same final page (no kind runs dry early or starves).
-    wants = []
-    for k, path, prm in plans:
-        if grand <= 0:
-            continue
-        a = round(offset * totals[k] / grand)
-        b = min(round((offset + limit) * totals[k] / grand), totals[k])
-        if b > a:
-            wants.append((k, path, prm, a, b))
+    # Exact global order across kinds: each kind's list is already in the chosen order, so
+    # the page is a k-way merge of the NEXT `limit` items from each kind, keeping the first
+    # `limit` by the sort key. A per-query cursor (how many of each kind are already used)
+    # is remembered when a page is served, so the next page continues exactly. With no
+    # cursor (first visit to that offset, e.g. after a restart) it is estimated from the
+    # kinds' share of the total, which is only approximately ordered at that one seam.
+    qkey = _pool_key(q)
+    cur = None
+    if offset == 0:
+        cur = {k: 0 for k, _, _ in plans}
+    else:
+        hit = _CURSORS.get(f"{qkey}|{offset}")
+        if hit and time.time() - hit[0] < _CURSOR_TTL:
+            cur = dict(hit[1])
+    if cur is None:
+        cur = {k: round(offset * totals[k] / grand) if grand else 0 for k, _, _ in plans}
+    sk = _browse_sort_key(q.sort)
 
-    async def slice_of(k, path, prm, a, b):
-        pages = range(a // 20 + 1, (b - 1) // 20 + 2)
-        datas = await asyncio.gather(*(page(path, prm, n) for n in pages if n <= _TMDB_MAX_PAGE),
-                                     return_exceptions=True)
-        items: list[dict] = []
-        for n, d in zip([n for n in pages if n <= _TMDB_MAX_PAGE], datas):
+    async def window_of(k, path, prm):
+        a, b = cur.get(k, 0), min(cur.get(k, 0) + limit, totals[k])
+        if b <= a:
+            return []
+        pnums = [n for n in range(a // 20 + 1, (b - 1) // 20 + 2) if n <= _TMDB_MAX_PAGE]
+        datas = await asyncio.gather(*(page(path, prm, n) for n in pnums), return_exceptions=True)
+        out = []
+        for n, d in zip(pnums, datas):
             if isinstance(d, Exception):
                 log.debug("browse page raised %s", d)
                 continue
-            items.extend((it, (n - 1) * 20 + i) for i, it in enumerate(d.get("results", [])))
-        return [_map_tmdb(it, k) for it, idx in items if a <= idx < b]
-    parts = await asyncio.gather(*(slice_of(*w) for w in wants))
-    # Interleave the kinds by rank so a page mixes films and series, most popular first.
-    merged: list[Result] = []
-    maxlen = max((len(x) for x in parts), default=0)
-    for i in range(maxlen):
-        for x in parts:
-            if i < len(x):
-                merged.append(x[i])
-    seen: set = set()
-    page_results = [r for r in merged if not (r.tmdb_id in seen or seen.add(r.tmdb_id))]
+            for i, it in enumerate(d.get("results", [])):
+                if a <= (n - 1) * 20 + i < b:
+                    out.append((k, it))
+        return out
+    wins = await asyncio.gather(*(window_of(k, path, prm) for k, path, prm in plans))
+    cand = [x for w in wins for x in w]
+    cand.sort(key=lambda kv: sk(kv[1]))
+    taken: list[tuple[str, dict]] = []
+    seen_ids: set = set()
+    used = {k: 0 for k, _, _ in plans}
+    for k, it in cand:
+        if len(taken) >= limit:
+            break
+        used[k] += 1
+        if it.get("id") in seen_ids:
+            continue
+        seen_ids.add(it.get("id"))
+        taken.append((k, it))
+    _CURSORS[f"{qkey}|{offset + len(taken)}"] = (time.time(), {k: cur.get(k, 0) + used[k] for k in used})
+    while len(_CURSORS) > _CURSOR_MAX:
+        _CURSORS.pop(next(iter(_CURSORS)))
+    page_results = [_map_tmdb(it, k) for k, it in taken]
     names = {g.lower() for g in list(q.genres) + (genres_for_mood(q.mood) if q.mood else [])}
     if names:
         for r in page_results:
