@@ -339,7 +339,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '2.11';
+const APP_VERSION = '2.12';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, total:0, loadingMore:false, checkedAt:null };
@@ -1315,6 +1315,7 @@ function openDetail(title, kind, rObj, blnFromSimilar){
   const db=$('#detailBody');
   enrich(r).then(fr=>{
     const badgeRow = db.querySelector('.mt-3.flex'); if(badgeRow) badgeRow.innerHTML=ratingBadges(fr)||'';
+    const ov = db.querySelector('.leading-relaxed'); if(ov && !r.overview && fr.overview) ov.textContent = fr.overview;
     // where to watch
     const wr = db.querySelector('#watchRow');
     if(wr){
@@ -1481,16 +1482,30 @@ async function openActor(pid, name){
   const hd=tmdbHeaders();
   try{
     const d=await (await fetch(`${API}/api/person/${pid}`,{headers:hd})).json();
-    const grid=(arr,title)=>{
+    // Every credit is tappable (opens its detail). Once where-to-watch arrives, titles on YOUR
+    // services get a green ✓ and float to the top of their section.
+    const items=[...(d.films||[]),...(d.shows||[])].map((x,i)=>({...x, poster_url:x.poster, platforms:[], _i:i}));
+    const onMine=x=>classify(x.platforms).status==='free';
+    const grid=(kind,title)=>{
+      const arr=items.filter(x=>x.kind===kind).sort((a,b)=>(onMine(b)-onMine(a))||((b.year||0)-(a.year||0)));
       if(!arr.length) return `<div class="text-onmute text-sm mt-3">${title} — none found.</div>`;
       return `<div class="text-xs uppercase tracking-widest text-onmute mt-4 mb-2">${title} <span class="opacity-70">(${arr.length})</span></div>
-        <div class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">${arr.map(x=>`<div class="relative aspect-[2/3] rounded-lg overflow-hidden border border-line group" style="background:${x.poster?`linear-gradient(to top,rgba(0,0,0,.7),transparent),url('${x.poster.replace(/'/g,'')}')`:'linear-gradient(135deg,#1b2436,#0e1320)'};background-size:cover;background-position:center">
-          <div class="absolute inset-x-0 bottom-0 p-1.5"><div class="text-[10px] font-semibold leading-tight line-clamp-2 text-white">${esc(x.title)}</div><div class="text-[9px] text-white/60">${x.year||''}${x.role?' · '+esc(x.role).slice(0,18):''}</div></div></div>`).join('')}</div>`;
+        <div class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">${arr.map(x=>`<button data-ai="${x._i}" class="relative aspect-[2/3] rounded-lg overflow-hidden border ${onMine(x)?'border-green-500':'border-line'} group text-left" style="background:${x.poster?`linear-gradient(to top,rgba(0,0,0,.7),transparent),url('${x.poster.replace(/'/g,'')}')`:'linear-gradient(135deg,#1b2436,#0e1320)'};background-size:cover;background-position:center">
+          ${onMine(x)?'<span class="absolute top-1 left-1 text-[9px] font-bold px-1.5 py-0.5 rounded bg-green-600 text-white">✓ yours</span>':''}
+          <div class="absolute inset-x-0 bottom-0 p-1.5"><div class="text-[10px] font-semibold leading-tight line-clamp-2 text-white">${esc(x.title)}</div><div class="text-[9px] text-white/80">${x.year||''}${x.role?' · '+esc(x.role).slice(0,18):''}</div></div></button>`).join('')}</div>`;
     };
-    $('#actorBody').innerHTML =
+    const drawActor=(strNote)=>{ $('#actorBody').innerHTML =
       (d.profile?`<img src="${d.profile}" class="w-20 h-20 rounded-full object-cover border-2 border-line" alt=""/>`:'')+
       (d.name&&d.name!==name?`<div class="text-onsub text-sm">${esc(d.name)}</div>`:'')+
-      grid(d.films,'Films')+grid(d.shows,'TV shows');
+      `<div class="text-xs text-onsub mt-2">Tap a title for details. ${strNote||''}</div>`+
+      grid('movie','Films')+grid('show','TV shows'); };
+    drawActor('Checking which are on your services…');
+    $('#actorBody').onclick=e=>{ const b=e.target.closest('[data-ai]'); if(b){ const it=items[+b.dataset.ai]; if(it) openDetail(null,null,it,false); } };
+    try{
+      const pv=await (await fetch(API+'/api/providers',{method:'POST',headers:{'Content-Type':'application/json',...hd},body:JSON.stringify({items:items.map(x=>({tmdb_id:x.tmdb_id,kind:x.kind}))})})).json();
+      items.forEach(x=>{ x.platforms=pv[x.kind+':'+x.tmdb_id]||[]; });
+      drawActor('<span style="color:#16a34a;font-weight:700">✓ yours</span> = on a service you have.');
+    }catch(e2){ drawActor(''); }
   }catch(err){
     $('#actorBody').innerHTML='<div class="text-red-300 text-sm">Could not load filmography.</div>';
   }
