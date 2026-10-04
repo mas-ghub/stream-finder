@@ -339,7 +339,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '2.08';
+const APP_VERSION = '2.09';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, total:0, loadingMore:false, checkedAt:null };
@@ -373,6 +373,13 @@ function toggleTheme(){ setTheme(currentTheme()==='dark'?'light':'dark'); render
 // ---------- PWA install ----------
 let deferredInstall = null;
 window.addEventListener('beforeinstallprompt', (e)=>{ e.preventDefault(); deferredInstall = e; });
+// The Install button only helps on Android/desktop Chrome (iPhone has no install prompt) and
+// only before the app is installed.
+function showInstallBtn(){
+  const blnStandalone = !!navigator.standalone || (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
+  const blnIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
+  return !blnStandalone && !blnIOS;
+}
 async function tryInstall(){
   if(deferredInstall){
     deferredInstall.prompt();
@@ -1067,7 +1074,7 @@ function render(spinner){
       </div>
       <div class="flex items-center gap-2.5 text-xs">
         <button id="wlOpen" title="Your saved titles + which subscription covers them" class="chip px-3.5 py-2 rounded-full select-none">📌 Watchlist</button>
-        <button id="install" title="Install Stream Finder as an app" class="chip px-3.5 py-2 rounded-full select-none" style="background:var(--c-panel2);border-color:var(--c-line)">⬇️ Install</button>
+        ${showInstallBtn()?`<button id="install" title="Install Stream Finder as an app" class="chip px-3.5 py-2 rounded-full select-none" style="background:var(--c-panel2);border-color:var(--c-line)">⬇️ Install</button>`:''}
         <button id="theme" title="Toggle light / dark" class="chip px-3.5 py-2 rounded-full select-none">${currentTheme()==='dark'?'☀️ Light':'🌙 Dark'}</button>
         <button id="gear" title="Settings & keys" class="chip w-9 h-9 rounded-full flex items-center justify-center select-none" aria-label="Settings">⚙️</button>
         <span title="Build" class="tabular-nums text-[11px] px-2 py-1 rounded-full select-none" style="background:var(--c-line);color:var(--c-onmute)">v${APP_VERSION}</span>
