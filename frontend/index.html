@@ -335,7 +335,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '2.04';
+const APP_VERSION = '2.05';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, total:0, loadingMore:false, checkedAt:null };
@@ -997,7 +997,6 @@ function animateCount(){
   const el=document.getElementById('resCount'); if(!el) return;
   const intTo=+el.dataset.n, intFrom=_countShown;
   if(!(intTo>intFrom)){ _countShown=intTo; return; }        // new search / fewer results: just show it
-  if(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches){ _countShown=intTo; return; }
   const t0=performance.now(), dur=Math.min(900, 300+(intTo-intFrom)*6);
   const step=now=>{
     const f=Math.min(1,(now-t0)/dur), v=Math.round(intFrom+(intTo-intFrom)*(1-Math.pow(1-f,3)));
@@ -1120,7 +1119,7 @@ function render(spinner){
 
   ${spinner?`<div class="mt-5 flex items-center gap-3"><div class="loadbar flex-1"></div><span id="progStatus" class="text-xs text-onsub tabular-nums">${allResults&&allResults.length?'Filling in — browse as they land…':'Searching…'}</span></div>`:''}
   <div class="flex items-center justify-between mt-5 mb-3 flex-wrap gap-2">
-    <h2 class="text-base font-semibold text-onsub">${spinner?(allResults&&allResults.length?`Filling in… <span class="text-accent">${shown.length}</span> so far`:'Searching…'):`<span id="resCount" data-n="${shown.length}" class="text-accent tabular-nums">${shown.length}</span> results${state.q?` for “${esc(state.q)}”`:''}${!subs.length?'':myServicesOn?` · your services`:myCh.length?` · ${myCh.length} service${myCh.length>1?'s':''}`:''}${state.streamOnly?' · you can stream':''}${state.freeOnly?' · free only':''}${state.englishOnly?' · English only':''}`}</h2>
+    <h2 class="text-base font-semibold text-onsub">${spinner?(allResults&&allResults.length?`Filling in… <span class="text-accent">${shown.length}</span> so far`:'Searching…'):`<span id="resCount" data-n="${shown.length}" class="text-accent tabular-nums">${Math.min(_countShown, shown.length).toLocaleString()}</span> results${state.q?` for “${esc(state.q)}”`:''}${!subs.length?'':myServicesOn?` · your services`:myCh.length?` · ${myCh.length} service${myCh.length>1?'s':''}`:''}${state.streamOnly?' · you can stream':''}${state.freeOnly?' · free only':''}${state.englishOnly?' · English only':''}`}</h2>
     ${spinner?'':`<label class="flex items-center gap-2 text-xs cursor-pointer select-none">
       <span class="text-onmute uppercase tracking-wide text-[11px]">Sort by</span>
        <select id="sort" class="field border border-line rounded-lg px-2.5 py-1.5 text-xs">
