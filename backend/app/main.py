@@ -334,6 +334,7 @@ class Query(BaseModel):
     sort: str = "relevance"
     limit: int = 60
     offset: int = 0  # "load more" pagination: start of the next batch
+    cursor: str | None = None  # client-held resume point (JSON {lane: position}) for true-paged browses
 
 
 class SourceStatus(BaseModel):
@@ -1217,7 +1218,7 @@ _POOL_MAX = 8
 
 
 def _pool_key(q) -> str:
-    return json.dumps(q.model_dump(exclude={"offset", "limit"}), sort_keys=True, default=str)
+    return json.dumps(q.model_dump(exclude={"offset", "limit", "cursor"}), sort_keys=True, default=str)
 
 
 async def _serve_page(q, ordered: list, pid: str | None) -> dict:
@@ -1469,6 +1470,15 @@ async def _browse_page(q: Query, prov_ids: list[int], pid: str | None) -> dict:
         if hit and time.time() - hit[0] < _CURSOR_TTL:
             cur = dict(hit[1])
             recent = list(hit[2])
+    if cur is None and q.cursor:
+        # The client remembered exactly where each lane stood (e.g. after an app relaunch or a
+        # server restart) — resume there instead of guessing from the totals.
+        try:
+            c = json.loads(q.cursor)
+            if isinstance(c, dict) and set(c) <= set(names_l):
+                cur = {nm: max(0, min(int(c.get(nm, 0)), totals[nm])) for nm in names_l}
+        except Exception:  # noqa: BLE001
+            cur = None
     if cur is None:
         cur = {nm: 0 for nm in names_l}
         left = offset
@@ -1561,7 +1571,7 @@ async def _browse_page(q: Query, prov_ids: list[int], pid: str | None) -> dict:
     # `next` = where the following page starts in the server's own ordering. The client must
     # use this (not its own card count, which loses cards to de-duplication).
     return {"results": [r.to_dict() for r in page_results], "count": len(page_results), "total": grand,
-            "next": offset + consumed}
+            "next": offset + consumed, "cur": dict(cur)}
 
 
 def _cancel_on_disconnect(fn):
@@ -1620,6 +1630,7 @@ async def search(
     sort: str = "relevance",
     limit: int = 60,
     offset: int = 0,
+    cursor: str | None = None,
     progress_id: str | None = None,
 ):
     # Be lenient: the frontend may URL-encode a genre with a space oddly,
@@ -1632,7 +1643,7 @@ async def search(
               channels=channels, where=where, stream_only=stream_only,
               free_only=free_only, english_only=english_only, rt_off=rt_off,
               rt_on=rt_on, household=household, fetch_all=fetch_all, pool=pool, sort=sort,
-              limit=limit, offset=max(0, offset))
+              limit=limit, offset=max(0, offset), cursor=cursor)
     # Rotten Tomatoes is OPT-IN: the scrape runs only when the client's own settings
     # have it enabled (rt_on). No flag from an old/unknown client means NO RT — the
     # slow "Reading ratings" step must never surprise anyone.

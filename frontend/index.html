@@ -339,7 +339,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '2.12';
+const APP_VERSION = '2.13';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, total:0, loadingMore:false, checkedAt:null };
@@ -447,8 +447,8 @@ function setLimit(v){ try{ localStorage.setItem('sf_max_results', String(v===0?0
 // can never grow without limit; a quota error just silently skips caching (never fatal).
 const CACHE_PREFIX = 'sf_c' + APP_VERSION + '_';   // versioned: each release starts with a clean results cache
 const CACHE_TTL = 24 * 3600 * 1000;   // 24h — matches the backend's provider cache window
-const CACHE_MAX = 4;                  // keep the most recent N searches
-const CACHE_MAX_BYTES = 1200 * 1024;  // a long Load-more session must survive an app relaunch
+const CACHE_MAX = 3;                  // keep the most recent N searches
+const CACHE_MAX_BYTES = 1600 * 1024;  // a long Load-more session must survive an app relaunch
 function cacheKeyFor(params){
   const q = new URLSearchParams(params);
   q.delete('progress_id');            // unique per search — must not be part of the key
@@ -471,13 +471,24 @@ function pruneCache(){
   ks.sort((a,b)=>((readCache(a)||{})._t||0)-((readCache(b)||{})._t||0));  // oldest first
   ks.slice(0, ks.length-CACHE_MAX).forEach(k=>{ try{ localStorage.removeItem(k); }catch(e){} });
 }
-function writeCache(key, results, total, next){
-  let arrRes = results || [], intNext = next || arrRes.length;
-  let blob = JSON.stringify({ _t: Date.now(), results: arrRes, total: total || arrRes.length, next: intNext });
-  if(blob.length > CACHE_MAX_BYTES){           // too big: keep the first cards that fit (next = what we kept)
-    arrRes = arrRes.slice(0, Math.max(60, Math.floor(arrRes.length * CACHE_MAX_BYTES / blob.length * 0.9)));
-    intNext = arrRes.length;
-    blob = JSON.stringify({ _t: Date.now(), results: arrRes, total: total || arrRes.length, next: intNext });
+// Cards are stored slimmed (no store rent/buy entries without a channel, no external url) so a
+// long Load-more session fits. If it still doesn't fit, trim back to the last page boundary
+// ("mark") that does, and store the server cursor recorded at that boundary — exact resume.
+function slimCard(r){
+  const c={...r}; delete c.external_url;
+  c.platforms=(r.platforms||[]).filter(p=>p.channel || p.type==='rent' || p.type==='buy');
+  return c;
+}
+function writeCache(key, results, total, next, cur, marks){
+  let arrRes=(results||[]).map(slimCard), intNext=next||arrRes.length, objCur=cur||null;
+  const mk=(res,nx,cu)=>JSON.stringify({ _t: Date.now(), results: res, total: total||res.length, next: nx, cur: cu });
+  let blob=mk(arrRes,intNext,objCur);
+  if(blob.length > CACHE_MAX_BYTES){
+    const ms=(marks||[]).filter(m=>m.len>0 && m.len<=arrRes.length);
+    for(let i=ms.length-1;i>=0;i--){
+      const t=arrRes.slice(0,ms[i].len), tb=mk(t,ms[i].next,ms[i].cur);
+      if(tb.length<=CACHE_MAX_BYTES){ arrRes=t; intNext=ms[i].next; objCur=ms[i].cur; blob=tb; break; }
+    }
     if(blob.length > CACHE_MAX_BYTES) return;
   }
   try{ localStorage.setItem(key, blob); pruneCache(); }
@@ -609,7 +620,7 @@ async function doSearch(opts){
   // request (which is what the free backend kept choking on).
   const PAGE = (state.limit && state.limit < 60) ? state.limit : 60;
   p.set('limit', PAGE);
-  if(pageOffset) p.set('offset', pageOffset);
+  if(pageOffset){ p.set('offset', pageOffset); if(state.cursor) p.set('cursor', JSON.stringify(state.cursor)); }
   // "where=true" asks the backend to return provider data for every result so we
   // can filter/annotate on the client. Widens the pool so filters have enough.
   const where = state.streamOnly || state.freeOnly || myCh.length>0;
@@ -639,6 +650,7 @@ async function doSearch(opts){
       allResults = hit.results || [];
       state.total = hit.total || allResults.length;   // so Load more still knows the server has more pages
       state.nextOffset = hit.next || allResults.length;
+      state.cursor = hit.cur || null; state.marks = [{len: allResults.length, next: state.nextOffset, cur: state.cursor}];
       state.loaded = allResults.length;   // show everything we have (no 40-at-a-time local reveal)
       state.checkedAt = hit._t;
       window.__backendDown = false;
@@ -649,7 +661,7 @@ async function doSearch(opts){
   }
   // A FRESH search (sort/filter/service change) must not inherit the previous search's cards —
   // they were ranked differently and would be mixed in after the new ones. (Load more keeps them.)
-  if(!pageOffset){ allResults = null; state.nextOffset = 0; _countShown = 0; }
+  if(!pageOffset){ allResults = null; state.nextOffset = 0; _countShown = 0; state.cursor = null; state.marks = []; }
   busy = true; render(true);
   // When Rotten Tomatoes is ON (a per-person choice), the "Reading ratings" step is
   // the slow one — say so explicitly so the longer wait looks intentional, not stuck.
@@ -715,12 +727,14 @@ async function doSearch(opts){
     // once duplicates are dropped, which made Load more re-request cards it already had).
     state.nextOffset = (typeof d.next === 'number') ? d.next : (pageOffset + (d.count || 0)) || allResults.length;
     state.loaded = allResults.length;   // everything fetched is visible; Load more grows it
+    state.cursor = d.cur || null;       // exact server position (per lane) for resuming after a relaunch
+    (state.marks = state.marks || []).push({len: allResults.length, next: state.nextOffset, cur: state.cursor});
     // This backend worked — remember it so the next visit just works (no setup).
     if(API){ try{ localStorage.setItem('sf_backend', API); }catch(e){} }
     // Store the response on the device (freshness-stamped) so repeating this exact search
     // is instant. Cache the server's own result list, not the merged `allResults` (which can
     // carry a previous search's leftovers) — page fetches store the accumulated list.
-    writeCache(ckey, pageOffset ? (allResults || []) : (d.results || []), state.total, state.nextOffset);
+    writeCache(ckey, pageOffset ? (allResults || []) : (d.results || []), state.total, state.nextOffset, state.cursor, state.marks);
     state.checkedAt = Date.now();
   }catch(e){
     if(mySeq!==searchSeq){ stopProgress=true; return; }   // superseded by a newer search
