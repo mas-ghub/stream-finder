@@ -335,7 +335,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '2.00';
+const APP_VERSION = '2.01';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, total:0, loadingMore:false, checkedAt:null };
@@ -530,7 +530,7 @@ function classify(providers){
     const cid=p.channel||channelFor(p);
     // A title is "included for you" if it's on a subscription you have (flatrate)
     // OR a free service you have (free type = BBC iPlayer, ITVX, Channel 4/5…).
-    if((p.type==='flatrate'||p.type==='free') && cid && have.has(cid)){
+    if((p.type==='flatrate'||p.type==='free'||p.type==='ads') && cid && have.has(cid)){
       if(!free.includes(cid)) free.push(cid);
       if(!subSeen.has(cid)){ subSeen.add(cid); const m=channelMetaList().find(c=>c.id===cid); subs.push({channel:cid, channel_name:m?m.name:(p.channel_name||p.provider), color:m?m.color:'#334155'}); }
     } else if((p.type==='rent'||p.type==='buy') && p.provider){
@@ -825,7 +825,7 @@ function sortResults(list, sort){
 }
 
 const PROV_COLOR = {'Netflix':'#E50914','Disney+':'#113CCF','Apple TV':'#5E5CE6','Sky':'#1E3A8A','Sky Cinema':'#1E3A8A','BBC iPlayer':'#A31BBB','ITVX':'#1E3A8A','Channel 4':'#0E7490','Channel 5':'#FF5C00','Prime Video':'#00A8E1','Paramount+':'#17083C','Hulu':'#1CE783','Shudder':'#334155','MUBI':'#334155','BritBox':'#1D4ED8','Acorn TV':'#1D3C5F','Crunchyroll':'#F47521','Pluto TV':'#6D28D9','Tubi':'#FF6A00','Free TV':'#3B82F6','Max':'#2563EB','Max (via Amazon)':'#4B5563','Amazon Channel':'#4B5563'};
-const SVC_LABEL = {flatrate:'In', rent:'Rent', buy:'Buy', free:'Free'};
+const SVC_LABEL = {flatrate:'In', rent:'Rent', buy:'Buy', free:'Free', ads:'Free'};
 function provChip(p){
   const c = PROV_COLOR[p.provider] || '#334155';
   const txt = SVC_LABEL[p.type] ? `${SVC_LABEL[p.type]} ${p.provider}` : p.provider;
@@ -853,7 +853,7 @@ function subsBadges(r){
   // The channel lens the results are actually filtered by (same source as the grid).
   // Family-fold it so "Sky" also counts Sky Cinema / Showcase / Go as in-scope.
   const active=new Set(lensChannels().map(channelFamily));
-  let subs=(r.platforms||[]).filter(p=>p.type==='flatrate'||p.type==='free');
+  let subs=(r.platforms||[]).filter(p=>p.type==='flatrate'||p.type==='free'||p.type==='ads');   // 'ads' = Channel 4 / ITVX / 5 (free with adverts)
   const seen=new Set(); const rows=[];
   subs.forEach(p=>{
     const nm=p.channel_name||p.provider; if(seen.has(nm)) return; seen.add(nm);
@@ -1201,12 +1201,12 @@ function showSubs(btn){
   const m=$('#modal');
   const have=new Set(getHousehold());
   const seenS=new Set(); const subs=[]; const others=[];
-  (r.platforms||[]).filter(p=>p.type==='flatrate'||p.type==='free').forEach(p=>{
+  (r.platforms||[]).filter(p=>p.type==='flatrate'||p.type==='free'||p.type==='ads').forEach(p=>{
     const name=p.channel_name||p.provider; if(seenS.has(name)) return; seenS.add(name);
     const cid=p.channel||channelFor(p);
     (cid && have.has(cid) ? subs : others).push({name, color:PROV_COLOR[name]||'#334155'});
   });
-  const rent=[...new Set((r.platforms||[]).filter(p=>p.type!=='flatrate'&&p.provider).map(p=>p.provider))];
+  const rent=[...new Set((r.platforms||[]).filter(p=>p.type!=='flatrate'&&p.type!=='free'&&p.type!=='ads'&&p.provider).map(p=>p.provider))];
   m.innerHTML=`<div class="fixed inset-0 z-50 overflow-y-auto overscroll-contain" style="padding-top:59px;-webkit-overflow-scrolling:touch"><div class="absolute bg-black/80 backdrop-blur-sm" style="position:fixed;inset:0" data-x></div><div class="relative min-h-full flex items-center justify-center p-4 pb-24" style="pointer-events:none" data-x>
     <div class="relative z-10 rounded-2xl border border-line fade p-6 w-full max-w-md" style="background:var(--c-panel);pointer-events:auto">
       <div class="flex items-center justify-between mb-3"><h3 class="text-lg font-bold">Where to watch — ${esc(r.title)}</h3><button data-x class="w-8 h-8 rounded-full field hoverable">✕</button></div>
