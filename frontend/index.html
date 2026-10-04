@@ -335,7 +335,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '2.02';
+const APP_VERSION = '2.03';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, total:0, loadingMore:false, checkedAt:null };
@@ -638,7 +638,7 @@ async function doSearch(opts){
   }
   // A FRESH search (sort/filter/service change) must not inherit the previous search's cards —
   // they were ranked differently and would be mixed in after the new ones. (Load more keeps them.)
-  if(!pageOffset){ allResults = null; state.nextOffset = 0; }
+  if(!pageOffset){ allResults = null; state.nextOffset = 0; state.pageNote=''; }
   busy = true; render(true);
   // When Rotten Tomatoes is ON (a per-person choice), the "Reading ratings" step is
   // the slow one — say so explicitly so the longer wait looks intentional, not stuck.
@@ -952,6 +952,7 @@ function loadMoreNow(){
       render(false);
       const lp=state.lastPage||{sent:intAdded,fresh:intAdded}, intVis=(state.poolTotal||0)-intVisBefore;
       const strWhy=(lp.sent!==intVis)?` (server sent ${lp.sent}${lp.sent-lp.fresh?`, ${lp.sent-lp.fresh} repeats`:''}${lp.fresh-intVis?`, ${lp.fresh-intVis} hidden by filter`:''})`:'';
+      state.pageNote=`v${APP_VERSION} · last add +${intVis}${strWhy}`;
       showToast(`+${intVis} loaded${strWhy} · ${(state.poolTotal||0).toLocaleString()} of ${total.toLocaleString()}`);
     }
     else if(!state.pageErr){                         // the server answered but had nothing left to show: that's the end
@@ -978,13 +979,13 @@ function updateMoreBar(intShown, intTotal, blnMore, blnBusy){
   if(!el){
     el=document.createElement('button'); el.id='moreBar';
     // Big, centred tap target; see-through (with blur) so the cards underneath stay visible.
-    el.className='fixed left-1/2 -translate-x-1/2 z-50 text-white text-base font-bold rounded-full px-8 py-4 shadow-xl whitespace-nowrap';
+    el.className='fixed left-1/2 -translate-x-1/2 z-50 text-white text-base font-bold rounded-3xl px-8 py-3 shadow-xl whitespace-pre text-center';
     el.style.cssText='bottom:calc(env(safe-area-inset-bottom,0px) + 16px);background:rgba(229,9,20,.78);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);border:1px solid rgba(255,255,255,.35);';
     el.addEventListener('click',loadMoreNow);
     document.body.appendChild(el);
   }
   if(!blnMore && !blnBusy){ el.classList.add('hidden'); return; }
-  el.textContent = blnBusy ? `Loading more… (${intShown.toLocaleString()} of ${intTotal.toLocaleString()})` : `Showing ${intShown.toLocaleString()} of ${intTotal.toLocaleString()} · Load more ▾`;
+  el.textContent = blnBusy ? `Loading more… (${intShown.toLocaleString()} of ${intTotal.toLocaleString()})` : `Showing ${intShown.toLocaleString()} of ${intTotal.toLocaleString()} · Load more ▾` + (state.pageNote?`\n${state.pageNote}`:'');
   // The bar is for when the real Load more button is OUT of view. When that button is on
   // screen the bar hides, so the two never sit on top of each other.
   el.classList.remove('hidden');
