@@ -500,91 +500,17 @@ def _map_tmdb_detail(d: dict, kind: str) -> Result:
 
 
 # ---------------------------------------------------------------------------
-# Rotten Tomatoes (scrape, no key) — Tomatometer / audience / cast / trailer
+# YouTube trailer helper (the Rotten Tomatoes scraper that lived here was removed)
 # ---------------------------------------------------------------------------
 def _youtube_id(url: str) -> str | None:
     m = re.search(r"(?:watch\?v=|youtu\.be/|embed/)([\w-]{6,})", url)
     return m.group(1) if m else None
 
 
-def _parse_rt(html: str) -> dict:
-    out: dict = {}
-    for m in re.finditer(r'<script type="application/ld\+json">(.*?)</script>', html, re.S):
-        try:
-            d = json.loads(m.group(1))
-        except Exception:
-            continue
-        if not isinstance(d, dict) or d.get("@type") not in ("Movie", "TVSeries", "TVShow"):
-            continue
-        for per in d.get("director") if isinstance(d.get("director"), list) else []:
-            if isinstance(per, dict) and per.get("name"):
-                out.setdefault("directors", []).append(per["name"])
-        for per in d.get("actor") if isinstance(d.get("actor"), list) else []:
-            if isinstance(per, dict) and per.get("name") and len(out.get("cast", [])) < 8:
-                out.setdefault("cast", []).append(per["name"])
-        for v in d.get("video") if isinstance(d.get("video"), list) else []:
-            if isinstance(v, dict) and v.get("url") and "youtu" in v["url"]:
-                vid = _youtube_id(v["url"])
-                if vid:
-                    out.setdefault("trailer", vid)
-        break
-    for key in ("criticsScore", "audienceScore"):
-        m = re.search(r'"' + key + r'":\{[^}]*?"averageRating"\s*:\s*"?([0-9.]+)', html)
-        if m:
-            out["rt_" + ("tomatometer" if key == "criticsScore" else "audience")] = min(100, int(float(m.group(1)) * 10))
-    if "trailer" not in out:
-        m = re.search(r"https?://(?:www\.|m\.)?youtube\.com/(?:watch\?v=|embed/)([\w-]{6,})|https?://youtu\.be/([\w-]{6,})", html)
-        if m:
-            out["trailer"] = m.group(1) or m.group(2)
-    return out
-
-
-async def _rt_resolve_url(title: str, kind: str, year: int | None) -> str | None:
-    """Resolve the canonical RT URL for a title. Optional Serper key makes it
-    reliable; without a key it best-efforts the slug and RT redirects if right."""
-    serper = settings.serper_api_key
-    if serper:
-        try:
-            r = await CLIENT.post(
-                "https://google.serper.dev/search",
-                headers={"X-API-KEY": serper, "Content-Type": "application/json"},
-                json={"q": f"rottentomatoes {title} {year or ''}".strip()},
-            )
-            for res in r.json().get("organic", []):
-                u = res.get("link", "")
-                if "rottentomatoes.com" in u and re.search(r"/(m|t)/", u):
-                    return u
-        except Exception as e:  # noqa: BLE001
-            log.debug("serper failed: %s", e)
-    slug = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")
-    prefix = "m" if kind == "movie" else "t"
-    return f"https://www.rottentomatoes.com/{prefix}/{slug}"
-
-
-# In-memory RT cache: scraping is the expensive part, so never re-scrape a title
-# we already tried (a miss is cached too, briefly, to avoid hammering RT).
-# (Declared with the other caches near the top — restored from disk at import time.)
-
-
 async def _rt_lookup(title: str, year: int | None, kind: str = "movie") -> dict:
-    if not settings.rt_enabled or not title:
-        return {}
-    key = (title.lower(), year, kind)
-    cached = _RT_CACHE.get(key)
-    if cached is not None and cached.get("_t", 0) > time.time():
-        return {k: v for k, v in cached.items() if not k.startswith("_")}
-    url = await _rt_resolve_url(title, kind, year)
-    data: dict = {}
-    try:
-        r = await CLIENT.get(url, headers={"Accept": "text/html"}, follow_redirects=True)
-        if r.status_code == 200:
-            data = _parse_rt(r.text)
-    except Exception as e:  # noqa: BLE001
-        log.debug("rt lookup failed for %s: %s", title, e)
-    _RT_CACHE[key] = {**data, "_t": time.time() + (settings.cache_ttl if data else _RT_MISS_TTL)}
-    if data:  # only persist real results, not the brief miss entries
-        _mark_cache_dirty()
-    return data
+    """Rotten Tomatoes scraping was removed (against their terms). Kept as a no-op so the
+    old call sites (all gated on settings.rt_enabled, now always False) stay harmless."""
+    return {}
 
 
 # ---------------------------------------------------------------------------
@@ -1279,7 +1205,6 @@ async def meta():
                           configured=tmdb_configured,
                           message="" if tmdb_configured else "add a free TMDB key in backend/.env to unlock movies"),
             SourceStatus(key="tvmaze", name="TVMaze", enabled=settings.tvmaze_enabled, configured=True),
-            SourceStatus(key="rt", name="Rotten Tomatoes", enabled=settings.rt_enabled, configured=True),
         ],
     }
 
@@ -1713,6 +1638,7 @@ async def search(
     # slow "Reading ratings" step must never surprise anyone.
     # Without RT the RT/min-RT *filters* are no-ops too — with no scores there's
     # nothing to filter or sort by, so a title without a score isn't wrongly dropped.
+    q.rt_on = False        # Rotten Tomatoes support was removed; ignore any old client that still asks
     if not q.rt_on:
         q.min_rt = None
         if q.sort in ("rt_critic", "rt_audience"):
@@ -2029,6 +1955,16 @@ async def similar(tmdb_id: int, kind: str = "movie"):
     while len(_SIMILAR_CACHE) > 200:
         _SIMILAR_CACHE.pop(next(iter(_SIMILAR_CACHE)))
     return {"results": out}
+
+
+@app.post("/api/providers")
+async def providers_batch(payload: dict):
+    """Fresh where-to-watch for a list of saved titles (the watchlist): {items:[{tmdb_id,kind}]}
+    -> {"<kind>:<tmdb_id>": [platforms]}. Uses the 24h provider cache, so it's cheap."""
+    items = [it for it in (payload.get("items") or [])[:150] if it.get("tmdb_id")]
+    rs = [Result(title="", kind="show" if it.get("kind") == "show" else "movie", tmdb_id=int(it["tmdb_id"])) for it in items]
+    await _gather_bounded([_attach_providers(r) for r in rs], 8)
+    return {f"{r.kind}:{r.tmdb_id}": r.platforms for r in rs}
 
 
 @app.get("/api/person/{person_id}")

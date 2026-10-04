@@ -335,7 +335,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '2.06';
+const APP_VERSION = '2.07';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, total:0, loadingMore:false, checkedAt:null };
@@ -422,7 +422,7 @@ function setHousehold(list){ localStorage.setItem('sf_household', JSON.stringify
 function getLimit(){ try{ const v=parseInt(localStorage.getItem('sf_max_results')); if(v===0) return 0; return v&&v>0?Math.min(v,1000):100; }catch(e){ return 100; } }
 // Rotten Tomatoes ratings: OFF by default — the backend spends a while scraping RT
 // per title (the "Reading ratings…" step), so we skip it unless the user turns it on.
-function rtOn(){ try{ return localStorage.getItem('sf_rt')==='1'; }catch(e){ return false; } }
+function rtOn(){ return false; }   // Rotten Tomatoes support was removed
 function setRtOn(on){ try{ localStorage.setItem('sf_rt', on?'1':'0'); }catch(e){} try{ sessionStorage.removeItem('sf_rt_notice'); }catch(e){} }
 function rtNoticeDismissed(){ try{ return sessionStorage.getItem('sf_rt_notice')==='1'; }catch(e){ return false; } }
 function setLimit(v){ try{ localStorage.setItem('sf_max_results', String(v===0?0:Math.min(Math.max(1,v),1000))); }catch(e){} }
@@ -914,6 +914,7 @@ function card(r){
     <div class="card-poster absolute inset-0" style="${posterBg(r)}"></div>
     ${rt!=null?`<div class="absolute top-2 left-2 z-10 flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-md" style="background:${scoreColor(rt)};color:#fff" title="Rating">★ ${rt}%</div>`:''}
     ${flag}
+    <button data-wl data-t="${esc(r.title)}" data-k="${r.kind}" aria-label="Save to watchlist" class="absolute z-20 w-9 h-9 rounded-full flex items-center justify-center text-lg" style="top:44px;right:8px;background:rgba(0,0,0,.6);color:#fff;border:1px solid rgba(255,255,255,.35)">${inWL(r)?'★':'☆'}</button>
     <div class="absolute inset-x-0 bottom-0 p-3 z-10 flex flex-col gap-1.5">
       <div class="flex items-center gap-1.5">
         <span class="text-[10px] font-bold uppercase tracking-wide text-white/90">${kindTag}</span>
@@ -1061,6 +1062,7 @@ function render(spinner){
         <p class="text-onsub mt-0.5 text-sm">One search across every screen.</p>
       </div>
       <div class="flex items-center gap-2.5 text-xs">
+        <button id="wlOpen" title="Your saved titles + which subscription covers them" class="chip px-3.5 py-2 rounded-full select-none">📌 Watchlist</button>
         <button id="install" title="Install Stream Finder as an app" class="chip px-3.5 py-2 rounded-full select-none" style="background:var(--c-panel2);border-color:var(--c-line)">⬇️ Install</button>
         <button id="theme" title="Toggle light / dark" class="chip px-3.5 py-2 rounded-full select-none">${currentTheme()==='dark'?'☀️ Light':'🌙 Dark'}</button>
         <button id="gear" title="Settings & keys" class="chip w-9 h-9 rounded-full flex items-center justify-center select-none" aria-label="Settings">⚙️</button>
@@ -1202,10 +1204,13 @@ function render(spinner){
   $('#chanAll')?.addEventListener('click',()=>{ const all=subscribedChannels().map(c=>c.id); setChannels(all); myServicesOn=all.length===subscribedChannels().length; state.channels=all; markChips(); doSearch(); });
   $('#chanNone')?.addEventListener('click',()=>{ setChannels([]); myServicesOn=false; state.channels=[]; markChips(); doSearch(); });
   if(new URLSearchParams(location.search).get('where')==='1' && grid) grid.scrollIntoView({behavior:'smooth',block:'nearest'});
+  $('#wlOpen')?.addEventListener('click',openWatchlist); wlRefreshButtons();
   document.querySelectorAll('.kindbtn').forEach(b=>b.addEventListener('click',()=>{state.kind=b.dataset.kind;render(false);doSearch();}));
   document.querySelectorAll('[data-mood]').forEach(b=>b.addEventListener('click',()=>{const m=b.dataset.mood;state.moods=state.moods.includes(m)?state.moods.filter(x=>x!==m):[...state.moods,m];render(false);doSearch();}));
   document.querySelectorAll('.card').forEach(c=>c.addEventListener('click',e=>{
     if(e.target.closest('[data-subs]')){ e.stopPropagation(); showSubs(e.target.closest('[data-subs]')); return; }
+    const wb=e.target.closest('[data-wl]');
+    if(wb){ e.stopPropagation(); const rr=(allResults||[]).find(x=>x.title===wb.dataset.t&&x.kind===wb.dataset.k); if(rr){ wb.textContent=toggleWL(rr)?'★':'☆'; wlRefreshButtons(); } return; }
     openDetail(c.dataset.t,c.dataset.k);
   }));
 }
@@ -1250,6 +1255,7 @@ function openDetail(title, kind, rObj, blnFromSimilar){
       <div id="detailBody" class="p-5 md:p-7 -mt-16 relative" style="background:var(--c-panel)">
         <div class="text-onsub text-xs uppercase tracking-widest">${r.kind==='movie'?'Film':'Series'}</div>
         <h2 class="text-3xl font-black mt-1">${esc(r.title)}</h2>
+        <button id="wlBtn" class="mt-2 px-3 py-1.5 rounded-full text-sm font-semibold field border border-line">${inWL(r)?'★ On your watchlist':'☆ Add to watchlist'}</button>
         <div class="mt-2 flex flex-wrap gap-2 items-center text-sm text-onsub">
           ${r.year?`<span>${r.year}</span>`:''}
           ${(r.genres||[]).map(g=>`<span class="chip px-2 py-0.5 rounded-full text-xs">${esc(g)}</span>`).join('')}
@@ -1271,6 +1277,7 @@ function openDetail(title, kind, rObj, blnFromSimilar){
   if(bk) bk.onclick=e=>{ e.stopPropagation(); window.removeEventListener('keydown',esc2); const prev=_detailStack.pop(); openDetail(prev.title, prev.kind, prev, true); };
   m.querySelector('[data-close]').onclick=e=>{if(e.target.dataset.close)close();};
   window.addEventListener('keydown',esc2);
+  const wlb=m.querySelector('#wlBtn'); if(wlb) wlb.onclick=e=>{ e.stopPropagation(); wlb.textContent=toggleWL(r)?'★ On your watchlist':'☆ Add to watchlist'; wlRefreshButtons(); };
   // enrich: always fetch where-to-watch + fuller ratings/trailer/cast
   const db=$('#detailBody');
   enrich(r).then(fr=>{
@@ -1318,6 +1325,94 @@ function openDetail(title, kind, rObj, blnFromSimilar){
     const b = e.target.closest('[data-pid]');
     if(b && b.dataset.pid){ openActor(b.dataset.pid, b.dataset.name); }
   });
+}
+
+// ---------- watchlist + "which subscription?" ----------
+// Saved on this device (localStorage). Each entry keeps enough to show a card and to know where it streams.
+function getWL(){ try{ return JSON.parse(localStorage.getItem('sf_watchlist')||'[]'); }catch(e){ return []; } }
+function setWL(arr){ try{ localStorage.setItem('sf_watchlist', JSON.stringify(arr)); }catch(e){} }
+function wlKey(r){ return r.kind+':'+(r.tmdb_id||r.title); }
+function inWL(r){ const k=wlKey(r); return getWL().some(x=>wlKey(x)===k); }
+function toggleWL(r){
+  const k=wlKey(r); let wl=getWL();
+  if(wl.some(x=>wlKey(x)===k)){ wl=wl.filter(x=>wlKey(x)!==k); setWL(wl); return false; }
+  wl.unshift({tmdb_id:r.tmdb_id, kind:r.kind, title:r.title, year:r.year, poster_url:r.poster_url, backdrop_url:r.backdrop_url,
+    overview:r.overview, genres:r.genres, ratings:r.ratings, platforms:r.platforms||[], added:Date.now(), wasOnMine:wlOnMine(r)});
+  setWL(wl.slice(0,200)); return true;
+}
+// Channel families a title streams on without an extra charge (subscription, free, or free-with-ads).
+function wlFamilies(r){
+  const s=new Set();
+  (r.platforms||[]).forEach(p=>{ if(p.type==='flatrate'||p.type==='free'||p.type==='ads'){ const c=p.channel||channelFor(p); if(c) s.add(channelFamily(c)); } });
+  return s;
+}
+function wlOnMine(r){ const mine=new Set(getHousehold().map(channelFamily)); for(const f of wlFamilies(r)) if(mine.has(f)) return true; return false; }
+function wlRefreshButtons(){ const n=getWL().length; const b=document.getElementById('wlOpen'); if(b) b.textContent=`📌 Watchlist${n?` (${n})`:''}`; }
+
+async function openWatchlist(){
+  const m=$('#modal');
+  const draw=()=>{
+    const wl=getWL();
+    const mine=new Set(getHousehold().map(channelFamily));
+    const meta={}; channelMetaList().forEach(c=>{ meta[channelFamily(c.id)]=meta[channelFamily(c.id)]||c; });
+    const nm=f=>(meta[f]&&meta[f].name)||f, col=f=>(meta[f]&&meta[f].color)||'#334155';
+    const fam=wl.map(wlFamilies);
+    // How many saved titles each service covers.
+    const count={}; fam.forEach(s=>s.forEach(f=>{ count[f]=(count[f]||0)+1; }));
+    const ranked=Object.keys(count).sort((a,b)=>count[b]-count[a]);
+    const covered=fam.filter(s=>s.size).length;
+    const notMine=fam.map((s,i)=>[...s].some(f=>mine.has(f))?-1:i).filter(i=>i>=0);
+    // What the user could add to unlock the most titles they can't stream today.
+    const gain={}; notMine.forEach(i=>fam[i].forEach(f=>{ if(!mine.has(f)) gain[f]=(gain[f]||0)+1; }));
+    const addBest=Object.keys(gain).sort((a,b)=>gain[b]-gain[a])[0];
+    // Smallest set of services (greedy) that covers everything coverable.
+    let left=new Set(fam.map((s,i)=>s.size?i:-1).filter(i=>i>=0)); const plan=[];
+    while(left.size && plan.length<6){
+      let best=null,bc=0; Object.keys(count).forEach(f=>{ const c=[...left].filter(i=>fam[i].has(f)).length; if(c>bc){ bc=c; best=f; } });
+      if(!best) break; plan.push([best,bc]); left=new Set([...left].filter(i=>!fam[i].has(best)));
+    }
+    const idle=[...mine].filter(f=>!count[f] && meta[f]);
+    const chip=(f)=>`<span class="text-[11px] px-2 py-0.5 rounded-md font-bold" style="background:${col(f)};color:#fff;${mine.has(f)?'border:2px solid #22c55e':''}">${esc(nm(f))}</span>`;
+    const insights = wl.length<2 ? '<p class="text-sm text-onsub">Save a few titles with the ☆ button on a card and this will tell you which subscription gets you the most of them.</p>' : `
+      <div class="space-y-1.5">${ranked.slice(0,8).map(f=>`<div class="flex items-center gap-2 text-sm"><span class="w-28 shrink-0 text-onfg font-semibold truncate">${esc(nm(f))}${mine.has(f)?' ✓':''}</span><div class="flex-1 h-3 rounded-full overflow-hidden" style="background:var(--c-line)"><div style="width:${Math.round(100*count[f]/wl.length)}%;height:100%;background:${col(f)}"></div></div><span class="w-14 text-right text-onfg tabular-nums">${count[f]} / ${wl.length}</span></div>`).join('')||'<p class="text-sm text-onsub">None of these are on a UK subscription service right now.</p>'}</div>
+      <div class="mt-3 space-y-1.5 text-sm text-onfg">
+        ${notMine.length?`<div>🔓 <b>${wl.length-notMine.length}</b> of ${wl.length} are on services you already have.${addBest?` Adding <b>${esc(nm(addBest))}</b> would unlock <b>${gain[addBest]}</b> more.`:''}</div>`:`<div>✅ Everything on your list that can be streamed is on services you already have.</div>`}
+        ${plan.length?`<div>🧩 Cheapest way to cover the lot: ${plan.map(([f,c])=>`${chip(f)} <span class="text-onsub">(${c})</span>`).join(' ')}</div>`:''}
+        ${idle.length?`<div>💤 Nothing on your list is on: ${idle.map(f=>chip(f)).join(' ')} — you could pause ${idle.length>1?'those':'it'} for now.</div>`:''}
+        ${wl.length-covered?`<div class="text-onsub">${wl.length-covered} title${wl.length-covered>1?'s are':' is'} not on any subscription service (rent/buy only).</div>`:''}
+      </div>`;
+    const rows=wl.map((r,i)=>{
+      const f=[...fam[i]]; const on=f.some(x=>mine.has(x));
+      return `<div class="flex items-center gap-3 py-2 border-b border-line">
+        <button data-open="${i}" class="shrink-0 w-12 h-[72px] rounded-md" style="background:#1b2436 url('${esc(r.poster_url||'')}') center/cover"></button>
+        <div class="flex-1 min-w-0"><button data-open="${i}" class="text-left font-bold text-onfg leading-tight">${esc(r.title)} <span class="text-onsub font-normal text-xs">${r.year||''} · ${r.kind==='show'?'Series':'Film'}</span></button>
+          ${r.newOn?`<div class="text-[11px] font-bold mt-0.5" style="color:#16a34a">🎉 Now on your services</div>`:''}
+          <div class="flex flex-wrap gap-1 mt-1">${f.length?f.slice(0,5).map(chip).join(''):'<span class="text-xs text-onsub">Not on a subscription service right now</span>'}</div></div>
+        <button data-rm="${i}" class="shrink-0 w-9 h-9 rounded-full field hoverable" title="Remove" aria-label="Remove">✕</button></div>`; }).join('');
+    m.innerHTML=`<div class="fixed inset-0 z-50 overflow-y-auto overscroll-contain" style="padding-top:59px;-webkit-overflow-scrolling:touch"><div class="absolute bg-black/80 backdrop-blur-sm" style="position:fixed;inset:0"></div><div class="relative min-h-full flex items-center justify-center p-4 pb-24" data-wc>
+      <div class="relative z-10 rounded-2xl border border-line fade p-5 w-full max-w-xl" style="background:var(--c-panel)">
+        <div class="flex items-center justify-between mb-3"><h3 class="text-lg font-bold text-onfg">📌 Your watchlist <span class="text-onsub text-sm font-normal">(${wl.length})</span></h3><button data-x class="w-8 h-8 rounded-full field hoverable">✕</button></div>
+        <div class="rounded-xl border border-line p-3 mb-3" style="background:var(--c-panel2)"><div class="text-xs uppercase tracking-widest text-onsub mb-2">Which subscription?</div>${insights}</div>
+        ${wl.length?rows:'<p class="text-sm text-onsub py-6 text-center">Nothing saved yet. Tap the ☆ on any card to add it.</p>'}
+        <div id="wlStatus" class="text-[11px] text-onsub mt-2"></div>
+      </div></div></div>`;
+    const close=()=>{ m.innerHTML=''; wlRefreshButtons(); };
+    m.querySelectorAll('[data-x]').forEach(b=>b.onclick=close);
+    m.querySelector('[data-wc]').onclick=e=>{ if(e.target.dataset.wc!==undefined) close(); };
+    m.querySelectorAll('[data-rm]').forEach(b=>b.onclick=e=>{ e.stopPropagation(); const w=getWL(); w.splice(+b.dataset.rm,1); setWL(w); wlRefreshButtons(); draw(); });
+    m.querySelectorAll('[data-open]').forEach(b=>b.onclick=e=>{ e.stopPropagation(); const r=getWL()[+b.dataset.open]; if(r){ r.newOn=false; openDetail(null,null,r,false); } });
+  };
+  draw();
+  // Refresh where-to-watch for everything saved (24h server cache keeps this cheap) and flag new arrivals.
+  const wl=getWL(); if(!wl.length) return;
+  const st=document.getElementById('wlStatus'); if(st) st.textContent='Checking where everything streams now…';
+  try{
+    const d=await (await fetch(API+'/api/providers',{method:'POST',headers:{'Content-Type':'application/json',...tmdbHeaders()},body:JSON.stringify({items:wl.map(r=>({tmdb_id:r.tmdb_id,kind:r.kind}))})})).json();
+    const cur=getWL();
+    cur.forEach(r=>{ const pl=d[r.kind+':'+r.tmdb_id]; if(pl&&pl.length){ r.platforms=pl; const on=wlOnMine(r); if(on&&!r.wasOnMine) r.newOn=true; r.wasOnMine=on; } });
+    setWL(cur);
+    if(document.querySelector('[data-wc]')) draw();
+  }catch(e){ const s2=document.getElementById('wlStatus'); if(s2) s2.textContent='Couldn’t refresh — showing what was saved.'; }
 }
 
 // ---------- actor popup: their films + shows ----------
@@ -1386,17 +1481,6 @@ async function openSettings(){
          </div>
          <div class="h-px bg-line"></div>
           <div>
-            <div class="flex items-center justify-between mb-2"><label class="font-semibold">Rotten Tomatoes ratings <span class="text-xs text-onmute">— 🍅 critic + 🍿 audience</span></label>
-              <span class="text-xs px-2 py-0.5 rounded-full" style="background:${state.rtOn?'rgba(80,250,157,.15)':'rgba(245,197,24,.15)'};color:${state.rtOn?'#50fa9d':'#ffd866'}">${state.rtOn?'on':'off'}</span></div>
-            <label class="flex items-center gap-2.5 text-sm cursor-pointer">
-              <input type="checkbox" id="k_rt" ${state.rtOn?'checked':''} class="accent-red-500 w-4 h-4"/>
-              <span>Show Rotten Tomatoes ratings <span class="text-onmute text-xs">(🍅 + 🍿 badges, RT sorts)</span></span>
-            </label>
-            <p class="text-xs text-onmute mt-1">Off (the default) = faster searches. <b>On</b> adds the tomato badges and RT sorts but each search takes noticeably longer (a “Reading Rotten Tomatoes ratings…” step). This is <b>per person</b> — it only affects your device, not other viewers.</p>
-            <div class="h-px bg-line my-4"></div>
-            <div class="flex items-center justify-between mb-2"><label class="font-semibold">Serper.dev <span class="text-xs text-onmute">— optional, makes TV ratings reliable</span></label>
-              <span class="text-xs px-2 py-0.5 rounded-full" style="background:${keys.serper.set?'rgba(80,250,157,.15)':'var(--chip-bg)'};color:${keys.serper.set?'#50fa9d':'var(--c-onmute)'}">${keys.serper.set?'configured':'optional'}</span></div>
-            <input id="k_serper" value="" placeholder="optional — without it, TV-show ratings often can't be found" class="w-full field border border-line rounded-xl px-3 py-2.5 text-sm"/>
           </div>`}
         <div class="h-px bg-line"></div>
         <div>

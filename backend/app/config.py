@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     # lives in the client (the "Rotten Tomatoes ratings" Settings toggle sends
     # rt_off on each search) — flipping it there is strictly per-device and must
     # NOT be persisted here, or one person's choice would change it for everyone.
-    rt_enabled: bool = True
+    rt_enabled: bool = False   # RT scraping removed — permanently off
 
     # Optional: a free Serper.dev key makes RT show-URL resolution reliable.
     # Movies work without it; add it to also get ratings for TV shows.
