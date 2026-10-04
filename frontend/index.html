@@ -339,7 +339,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '2.15';
+const APP_VERSION = '2.16';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, total:0, loadingMore:false, checkedAt:null };
@@ -445,60 +445,53 @@ function setLimit(v){ try{ localStorage.setItem('sf_max_results', String(v===0?0
 // round-trip, so the slow "Checking where it streams…" pass is skipped. Only "Force
 // refresh" or the TTL lapsing goes back to the server. Bounded LRU + a size guard so it
 // can never grow without limit; a quota error just silently skips caching (never fatal).
-const CACHE_PREFIX = 'sf_c' + APP_VERSION + '_';   // versioned: each release starts with a clean results cache
+// Saved in IndexedDB (hundreds of MB of room) rather than localStorage (~5 MB), so a session of
+// thousands of cards survives closing the app. The key is NOT tied to the app version, so a new
+// release no longer wipes your saved list (bump CACHE_SCHEMA only if the card shape changes).
+const CACHE_SCHEMA = 's2';
+const CACHE_PREFIX = 'sf_' + CACHE_SCHEMA + '_';
 const CACHE_TTL = 24 * 3600 * 1000;   // 24h — matches the backend's provider cache window
-const CACHE_MAX = 3;                  // keep the most recent N searches
-const CACHE_MAX_BYTES = 1600 * 1024;  // a long Load-more session must survive an app relaunch
+const CACHE_MAX = 5;                  // keep the most recent N searches
 function cacheKeyFor(params){
   const q = new URLSearchParams(params);
   q.delete('progress_id');            // unique per search — must not be part of the key
-  q.delete('offset');                 // pages of the same search share one cache entry
+  q.delete('offset'); q.delete('cursor');   // pages of the same search share one cache entry
   return CACHE_PREFIX + q.toString();
 }
-function readCache(key){
-  try{ const o = JSON.parse(localStorage.getItem(key) || 'null'); return (o && o._t && Array.isArray(o.results) && o.total > 0) ? o : null; }   // entries without a server total (pre-paging) are ignored
+var _idbP=null;
+function idb(){
+  if(_idbP) return _idbP;
+  _idbP = new Promise((res,rej)=>{
+    try{ const rq=indexedDB.open('sf_cache_db',1); rq.onupgradeneeded=()=>rq.result.createObjectStore('results'); rq.onsuccess=()=>res(rq.result); rq.onerror=()=>rej(rq.error); }
+    catch(e){ rej(e); }
+  });
+  return _idbP;
+}
+function idbReq(mode, fn){ return idb().then(db=>new Promise((res,rej)=>{ const st=db.transaction('results',mode).objectStore('results'); const rq=fn(st); rq.onsuccess=()=>res(rq.result); rq.onerror=()=>rej(rq.error); })); }
+async function readCache(key){
+  // IndexedDB can hang on some browsers (private mode, blocked storage): never let that stall a search.
+  try{ const o = await Promise.race([idbReq('readonly', st=>st.get(key)), new Promise(res=>setTimeout(()=>res(null), 1500))]); return (o && o._t && Array.isArray(o.results) && o.total > 0) ? o : null; }
   catch(e){ return null; }
 }
-// Drop saved results from any earlier release (they may hold old totals / old result shapes).
-try{ Object.keys(localStorage).filter(k=>/^sf_c(\d+\.\d+)?_/.test(k) && k.indexOf(CACHE_PREFIX)!==0).forEach(k=>localStorage.removeItem(k)); }catch(e){}
-function cacheKeys(){
-  const ks=[]; for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); if(k && k.indexOf(CACHE_PREFIX)===0) ks.push(k); }
-  return ks;
-}
-function pruneCache(){
-  const ks=cacheKeys();
-  if(ks.length<=CACHE_MAX) return;
-  ks.sort((a,b)=>((readCache(a)||{})._t||0)-((readCache(b)||{})._t||0));  // oldest first
-  ks.slice(0, ks.length-CACHE_MAX).forEach(k=>{ try{ localStorage.removeItem(k); }catch(e){} });
-}
-// Cards are stored slimmed (no store rent/buy entries without a channel, no external url) so a
-// long Load-more session fits. If it still doesn't fit, trim back to the last page boundary
-// ("mark") that does, and store the server cursor recorded at that boundary — exact resume.
+// Drop the old localStorage-based caches (pre-IndexedDB).
+try{ Object.keys(localStorage).filter(k=>/^sf_c(\d+\.\d+)?_/.test(k)).forEach(k=>localStorage.removeItem(k)); }catch(e){}
+// Cards are stored slimmed (no external url; no rent/buy entries for untracked providers).
 function slimCard(r){
   const c={...r}; delete c.external_url;
   c.platforms=(r.platforms||[]).filter(p=>p.channel || p.type==='rent' || p.type==='buy');
   return c;
 }
-function writeCache(key, results, total, next, cur, marks){
-  let arrRes=(results||[]).map(slimCard), intNext=next||arrRes.length, objCur=cur||null;
-  const mk=(res,nx,cu)=>JSON.stringify({ _t: Date.now(), results: res, total: total||res.length, next: nx, cur: cu });
-  let blob=mk(arrRes,intNext,objCur);
-  if(blob.length > CACHE_MAX_BYTES){
-    const ms=(marks||[]).filter(m=>m.len>0 && m.len<=arrRes.length);
-    for(let i=ms.length-1;i>=0;i--){
-      const t=arrRes.slice(0,ms[i].len), tb=mk(t,ms[i].next,ms[i].cur);
-      if(tb.length<=CACHE_MAX_BYTES){ arrRes=t; intNext=ms[i].next; objCur=ms[i].cur; blob=tb; break; }
+async function writeCache(key, results, total, next, cur){
+  try{
+    const arr=(results||[]).map(slimCard);
+    await idbReq('readwrite', st=>st.put({ _t: Date.now(), results: arr, total: total||arr.length, next: next||arr.length, cur: cur||null }, key));
+    // keep only the most recent CACHE_MAX searches
+    const keys=await idbReq('readonly', st=>st.getAllKeys());
+    if(keys.length>CACHE_MAX){
+      const rows=await Promise.all(keys.map(async k=>[k,((await readCache(k))||{})._t||0]));
+      rows.sort((a,b)=>a[1]-b[1]).slice(0, keys.length-CACHE_MAX).forEach(([k])=>idbReq('readwrite', st=>st.delete(k)).catch(()=>{}));
     }
-    if(blob.length > CACHE_MAX_BYTES) return;
-  }
-  try{ localStorage.setItem(key, blob); pruneCache(); }
-  catch(e){                                   // quota error → drop the oldest entry, retry once
-    try{
-      const ks=cacheKeys().sort((a,b)=>((readCache(a)||{})._t||0)-((readCache(b)||{})._t||0));
-      if(ks.length) localStorage.removeItem(ks[0]);
-      localStorage.setItem(key, blob);
-    }catch(e2){/* still too big — fine, just don't cache */}
-  }
+  }catch(e){ /* IndexedDB unavailable / quota — just don't cache */ }
 }
 function cacheAgeLabel(ts){
   const s=Math.max(0,(Date.now()-ts)/1000);
@@ -646,7 +639,7 @@ async function doSearch(opts){
   // it streams…" pass is skipped entirely. "Force refresh" (or the TTL lapsing) refetches.
   const ckey = cacheKeyFor(p);
   if(!force && !pageOffset){
-    const hit = readCache(ckey);
+    const hit = await readCache(ckey);
     if(hit && (Date.now() - hit._t) < CACHE_TTL){
       if(mySeq !== searchSeq) return;      // a newer search started meanwhile
       allResults = hit.results || [];
@@ -736,7 +729,7 @@ async function doSearch(opts){
     // Store the response on the device (freshness-stamped) so repeating this exact search
     // is instant. Cache the server's own result list, not the merged `allResults` (which can
     // carry a previous search's leftovers) — page fetches store the accumulated list.
-    writeCache(ckey, pageOffset ? (allResults || []) : (d.results || []), state.total, state.nextOffset, state.cursor, state.marks);
+    writeCache(ckey, pageOffset ? (allResults || []) : (d.results || []), state.total, state.nextOffset, state.cursor);
     state.checkedAt = Date.now();
   }catch(e){
     if(mySeq!==searchSeq){ stopProgress=true; return; }   // superseded by a newer search
@@ -1609,6 +1602,7 @@ async function openSettings(){
    // --- save ---
     $('#clearCache').onclick=async()=>{
       try{ Object.keys(localStorage).filter(k=>/^sf_c(\d+\.\d+)?_/.test(k)).forEach(k=>localStorage.removeItem(k)); }catch(e){}
+      try{ await idbReq('readwrite', st=>st.clear()); }catch(e){}
       try{ if(window.caches){ (await caches.keys()).forEach(k=>caches.delete(k)); } }catch(e){}
       try{ const regs = navigator.serviceWorker ? await navigator.serviceWorker.getRegistrations() : []; await Promise.all(regs.map(r=>r.unregister())); }catch(e){}
       location.reload();
