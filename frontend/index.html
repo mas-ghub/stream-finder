@@ -339,7 +339,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '2.09';
+const APP_VERSION = '2.10';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, total:0, loadingMore:false, checkedAt:null };
@@ -926,6 +926,7 @@ function card(r){
     ${rt!=null?`<div class="absolute top-2 left-2 z-10 flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-md" style="background:${scoreColor(rt)};color:#fff" title="Rating">★ ${rt}%</div>`:''}
     ${flag}
     <button data-wl data-t="${esc(r.title)}" data-k="${r.kind}" aria-label="Save to watchlist" class="absolute z-20 w-9 h-9 rounded-full flex items-center justify-center text-lg" style="top:44px;right:8px;background:rgba(0,0,0,.6);color:#fff;border:1px solid rgba(255,255,255,.35)">${inWL(r)?'★':'☆'}</button>
+    <button data-seen data-t="${esc(r.title)}" data-k="${r.kind}" aria-label="Mark as watched" title="Mark as watched" class="absolute z-20 w-9 h-9 rounded-full flex items-center justify-center text-base" style="top:88px;right:8px;background:${isSeen(r)?'#16a34a':'rgba(0,0,0,.6)'};color:#fff;border:1px solid rgba(255,255,255,.35)">👁</button>
     <div class="absolute inset-x-0 bottom-0 p-3 z-10 flex flex-col gap-1.5">
       <div class="flex items-center gap-1.5">
         <span class="text-[10px] font-bold uppercase tracking-wide text-white/90">${kindTag}</span>
@@ -1033,6 +1034,7 @@ function render(spinner){
   if(state.streamOnly) shown = shown.filter(r => classify(r.platforms).status === 'free');
   if(state.freeOnly) shown = shown.filter(r => classify(r.platforms).noExtra);
   if(state.englishOnly) shown = shown.filter(r => (r.language||'').toLowerCase()==='en');
+  if(hideSeenOn() && getSeen().length){ const sk=new Set(getSeen().map(x=>x.kind+':'+(x.tmdb_id||x.title))); shown = shown.filter(r=>!sk.has(r.kind+':'+(r.tmdb_id||r.title))); }
   // (RT is a badge/sort, not a filter — so there's no client-side RT filter. When RT
   // is off, searches simply return no tomato scores; the "🍅 rated" box is hidden.)
   // Channel selection on the main screen: keep only titles on the picked services.
@@ -1111,6 +1113,7 @@ function render(spinner){
       ${state.rtOn?`<label class="flex items-center gap-1.5 text-xs cursor-pointer select-none"><input type="checkbox" id="minRt" ${state.minRt?'checked':''} class="accent-red-500 w-3.5 h-3.5"/> <span class="${state.minRt?'text-red-400 font-semibold':'text-onsub'}">🍅 rated</span></label>`:''}
       <label class="flex items-center gap-1.5 text-xs cursor-pointer select-none"><input type="checkbox" id="streamOnly" ${state.streamOnly?'checked':''} class="accent-green-500 w-3.5 h-3.5"/> <span class="${state.streamOnly?'text-green-400 font-semibold':'text-onsub'}">I can stream</span></label>
       <label class="flex items-center gap-1.5 text-xs cursor-pointer select-none" title="Only titles you can watch for nothing extra — included in a service you have, or on a free service. Excludes rent/buy (Sky Store, Apple TV Store, Prime pay-movies)."><input type="checkbox" id="freeOnly" ${state.freeOnly?'checked':''} class="accent-cyan-400 w-3.5 h-3.5"/> <span class="${state.freeOnly?'text-cyan-300 font-semibold':'text-onsub'}">Free only</span></label>
+      <label class="flex items-center gap-1.5 text-xs cursor-pointer select-none" title="Hide titles you've marked as watched (👁)."><input type="checkbox" id="hideSeen" ${hideSeenOn()?'checked':''} class="accent-blue-500 w-3.5 h-3.5"/> <span class="${hideSeenOn()?'text-blue-400 font-semibold':'text-onsub'}">Hide watched${getSeen().length?` (${getSeen().length})`:''}</span></label>
       <label class="flex items-center gap-1.5 text-xs cursor-pointer select-none" title="Only titles originally produced in English (drops foreign-language films and shows)."><input type="checkbox" id="englishOnly" ${state.englishOnly?'checked':''} class="accent-blue-500 w-3.5 h-3.5"/> <span class="${state.englishOnly?'text-blue-400 font-semibold':'text-onsub'}">English only</span></label>
       <button id="go" class="bg-accent hover:bg-red-700 px-5 py-1.5 rounded-xl text-xs font-semibold">Search</button>
       <button id="clear" class="px-3 py-1.5 rounded-xl chip text-xs text-onsub">Reset</button>
@@ -1179,6 +1182,7 @@ function render(spinner){
   $('#streamOnly')?.addEventListener('change',e=>{state.streamOnly=e.target.checked;e.target?.nextElementSibling&&(e.target.nextElementSibling.className=state.streamOnly?'text-green-400 font-semibold':'text-onsub');render(false);});
   $('#freeOnly')?.addEventListener('change',e=>{state.freeOnly=e.target.checked;e.target?.nextElementSibling&&(e.target.nextElementSibling.className=state.freeOnly?'text-cyan-300 font-semibold':'text-onsub');doSearch();});
   $('#minRt')?.addEventListener('change',e=>{state.minRt=e.target.checked?1:0;e.target?.nextElementSibling&&(e.target.nextElementSibling.className=state.minRt?'text-red-400 font-semibold':'text-onsub');doSearch();});
+  $('#hideSeen')?.addEventListener('change',e=>{ try{ localStorage.setItem('sf_hide_seen', e.target.checked?'1':'0'); }catch(x){} render(false); });
   $('#englishOnly')?.addEventListener('change',e=>{state.englishOnly=e.target.checked;e.target?.nextElementSibling&&(e.target.nextElementSibling.className=state.englishOnly?'text-blue-400 font-semibold':'text-onsub');doSearch();});
   // Dismiss the "RT is on = slower" notice (per session, until they change the setting).
   $('#rtNoticeX')?.addEventListener('click',()=>{ try{ sessionStorage.setItem('sf_rt_notice','1'); }catch(e){} render(false); });
@@ -1220,6 +1224,8 @@ function render(spinner){
   document.querySelectorAll('[data-mood]').forEach(b=>b.addEventListener('click',()=>{const m=b.dataset.mood;state.moods=state.moods.includes(m)?state.moods.filter(x=>x!==m):[...state.moods,m];render(false);doSearch();}));
   document.querySelectorAll('.card').forEach(c=>c.addEventListener('click',e=>{
     if(e.target.closest('[data-subs]')){ e.stopPropagation(); showSubs(e.target.closest('[data-subs]')); return; }
+    const sb=e.target.closest('[data-seen]');
+    if(sb){ e.stopPropagation(); const rr=(allResults||[]).find(x=>x.title===sb.dataset.t&&x.kind===sb.dataset.k); if(rr){ const now=toggleSeen(rr); wlRefreshButtons(); showToast(now?'Marked as watched':'Back to unwatched'); render(false); } return; }
     const wb=e.target.closest('[data-wl]');
     if(wb){ e.stopPropagation(); const rr=(allResults||[]).find(x=>x.title===wb.dataset.t&&x.kind===wb.dataset.k); if(rr){ wb.textContent=toggleWL(rr)?'★':'☆'; wlRefreshButtons(); } return; }
     openDetail(c.dataset.t,c.dataset.k);
@@ -1266,7 +1272,8 @@ function openDetail(title, kind, rObj, blnFromSimilar){
       <div id="detailBody" class="p-5 md:p-7 -mt-16 relative" style="background:var(--c-panel)">
         <div class="text-onsub text-xs uppercase tracking-widest">${r.kind==='movie'?'Film':'Series'}</div>
         <h2 class="text-3xl font-black mt-1">${esc(r.title)}</h2>
-        <button id="wlBtn" class="mt-2 px-3 py-1.5 rounded-full text-sm font-semibold field border border-line">${inWL(r)?'★ On your watchlist':'☆ Add to watchlist'}</button>
+        <div class="mt-2 flex flex-wrap gap-2"><button id="wlBtn" class="px-3 py-1.5 rounded-full text-sm font-semibold field border border-line">${inWL(r)?'★ On your watchlist':'☆ Add to watchlist'}</button>
+        <button id="seenBtn" class="px-3 py-1.5 rounded-full text-sm font-semibold field border border-line">${isSeen(r)?'✓ Watched':'👁 Mark as watched'}</button></div>
         <div class="mt-2 flex flex-wrap gap-2 items-center text-sm text-onsub">
           ${r.year?`<span>${r.year}</span>`:''}
           ${(r.genres||[]).map(g=>`<span class="chip px-2 py-0.5 rounded-full text-xs">${esc(g)}</span>`).join('')}
@@ -1289,6 +1296,7 @@ function openDetail(title, kind, rObj, blnFromSimilar){
   m.querySelector('[data-close]').onclick=e=>{if(e.target.dataset.close)close();};
   window.addEventListener('keydown',esc2);
   const wlb=m.querySelector('#wlBtn'); if(wlb) wlb.onclick=e=>{ e.stopPropagation(); wlb.textContent=toggleWL(r)?'★ On your watchlist':'☆ Add to watchlist'; wlRefreshButtons(); };
+  const sbn=m.querySelector('#seenBtn'); if(sbn) sbn.onclick=e=>{ e.stopPropagation(); const now=toggleSeen(r); sbn.textContent=now?'✓ Watched':'👁 Mark as watched'; if(wlb) wlb.textContent=inWL(r)?'★ On your watchlist':'☆ Add to watchlist'; wlRefreshButtons(); };
   // enrich: always fetch where-to-watch + fuller ratings/trailer/cast
   const db=$('#detailBody');
   enrich(r).then(fr=>{
@@ -1342,6 +1350,20 @@ function openDetail(title, kind, rObj, blnFromSimilar){
 // Saved on this device (localStorage). Each entry keeps enough to show a card and to know where it streams.
 function getWL(){ try{ return JSON.parse(localStorage.getItem('sf_watchlist')||'[]'); }catch(e){ return []; } }
 function setWL(arr){ try{ localStorage.setItem('sf_watchlist', JSON.stringify(arr)); }catch(e){} }
+// Watched ("seen") titles: kept on this device; "Hide watched" drops them from results.
+function getSeen(){ try{ return JSON.parse(localStorage.getItem('sf_seen')||'[]'); }catch(e){ return []; } }
+function setSeen(a){ try{ localStorage.setItem('sf_seen', JSON.stringify(a)); }catch(e){} }
+function isSeen(r){ const k=r.kind+':'+(r.tmdb_id||r.title); return getSeen().some(x=>(x.kind+':'+(x.tmdb_id||x.title))===k); }
+function toggleSeen(r){
+  const k=r.kind+':'+(r.tmdb_id||r.title); let a=getSeen();
+  if(a.some(x=>(x.kind+':'+(x.tmdb_id||x.title))===k)){ a=a.filter(x=>(x.kind+':'+(x.tmdb_id||x.title))!==k); setSeen(a); return false; }
+  a.unshift({tmdb_id:r.tmdb_id, kind:r.kind, title:r.title, year:r.year, poster_url:r.poster_url, at:Date.now()});
+  setSeen(a.slice(0,2000));
+  // Seen it -> it no longer belongs on the to-watch list.
+  const wl=getWL().filter(x=>wlKey(x)!==wlKey(r)); setWL(wl);
+  return true;
+}
+function hideSeenOn(){ try{ return localStorage.getItem('sf_hide_seen')!=='0'; }catch(e){ return true; } }
 function wlKey(r){ return r.kind+':'+(r.tmdb_id||r.title); }
 function inWL(r){ const k=wlKey(r); return getWL().some(x=>wlKey(x)===k); }
 function toggleWL(r){
@@ -1405,11 +1427,14 @@ async function openWatchlist(){
         <div class="flex items-center justify-between mb-3"><h3 class="text-lg font-bold text-onfg">📌 Your watchlist <span class="text-onsub text-sm font-normal">(${wl.length})</span></h3><button data-x class="w-8 h-8 rounded-full field hoverable">✕</button></div>
         <div class="rounded-xl border border-line p-3 mb-3" style="background:var(--c-panel2)"><div class="text-xs uppercase tracking-widest text-onsub mb-2">Which subscription?</div>${insights}</div>
         ${wl.length?rows:'<p class="text-sm text-onsub py-6 text-center">Nothing saved yet. Tap the ☆ on any card to add it.</p>'}
+        ${getSeen().length?`<details class="mt-4"><summary class="text-sm font-semibold text-onfg cursor-pointer">👁 Watched (${getSeen().length}) — tap ↩ to put one back</summary>
+          <div class="mt-2 max-h-56 overflow-y-auto">${getSeen().map((x,i)=>`<div class="flex items-center gap-2 py-1.5 border-b border-line text-sm"><span class="flex-1 min-w-0 truncate text-onfg">${esc(x.title)} <span class="text-onsub text-xs">${x.year||''}</span></span><button data-unseen="${i}" class="shrink-0 px-2.5 py-1 rounded-full field hoverable text-xs font-semibold">↩ Unmark</button></div>`).join('')}</div></details>`:''}
         <div id="wlStatus" class="text-[11px] text-onsub mt-2"></div>
       </div></div></div>`;
     const close=()=>{ m.innerHTML=''; wlRefreshButtons(); };
     m.querySelectorAll('[data-x]').forEach(b=>b.onclick=close);
     m.querySelector('[data-wc]').onclick=e=>{ if(e.target.dataset.wc!==undefined) close(); };
+    m.querySelectorAll('[data-unseen]').forEach(b=>b.onclick=e=>{ e.stopPropagation(); const a=getSeen(); a.splice(+b.dataset.unseen,1); setSeen(a); draw(); });
     m.querySelectorAll('[data-rm]').forEach(b=>b.onclick=e=>{ e.stopPropagation(); const w=getWL(); w.splice(+b.dataset.rm,1); setWL(w); wlRefreshButtons(); draw(); });
     m.querySelectorAll('[data-open]').forEach(b=>b.onclick=e=>{ e.stopPropagation(); const r=getWL()[+b.dataset.open]; if(r){ r.newOn=false; openDetail(null,null,r,false); } });
   };
