@@ -335,7 +335,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '2.01';
+const APP_VERSION = '2.02';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, total:0, loadingMore:false, checkedAt:null };
@@ -695,6 +695,7 @@ async function doSearch(opts){
     if(pageOffset){
       const seen=new Set(prev.map(key));
       allResults=[...prev, ...(d.results||[]).filter(r=>!seen.has(key(r)))];
+      state.lastPage={sent:(d.results||[]).length, fresh:allResults.length-prev.length};
     }else{
       const seen=new Set((d.results||[]).map(key));
       allResults=[...(d.results||[]), ...prev.filter(r=>!seen.has(key(r)))];
@@ -942,12 +943,17 @@ function loadMoreNow(){
   const total = Math.min(state.total || 0, cap);
   const intNext = state.nextOffset || pool.length;       // the server's own position, not our card count
   if(!pool.length || intNext >= total || state.loadingMore) return;
-  const intBefore = pool.length;
+  const intBefore = pool.length, intVisBefore = state.poolTotal||0;
   state.loadingMore = true; state.pageErr = false; render(false);
   Promise.resolve(doSearch({offset: intNext})).finally(()=>{
     state.loadingMore=false;
     const intAdded = (allResults||[]).length - intBefore;
-    if(intAdded>0) showToast(`+${intAdded} loaded · ${(allResults||[]).length.toLocaleString()} of ${total.toLocaleString()}`);
+    if(intAdded>0){
+      render(false);
+      const lp=state.lastPage||{sent:intAdded,fresh:intAdded}, intVis=(state.poolTotal||0)-intVisBefore;
+      const strWhy=(lp.sent!==intVis)?` (server sent ${lp.sent}${lp.sent-lp.fresh?`, ${lp.sent-lp.fresh} repeats`:''}${lp.fresh-intVis?`, ${lp.fresh-intVis} hidden by filter`:''})`:'';
+      showToast(`+${intVis} loaded${strWhy} · ${(state.poolTotal||0).toLocaleString()} of ${total.toLocaleString()}`);
+    }
     else if(!state.pageErr){                         // the server answered but had nothing left to show: that's the end
       state.total = (allResults||[]).length;
       showToast("That's everything — no more titles");
