@@ -2,7 +2,40 @@
 
 Working notes so we can pick up where we left off. Not user-facing (that's README.md).
 
-## ⭐ CURRENT STATE — READ THIS FIRST (2026-10-02 evening, v1.99 / sw shell-v71)
+## ⭐ CURRENT STATE — READ THIS FIRST (2026-10-04, v2.11 / sw shell-v83)
+
+**Done since v1.99 (all deployed: Pages auto on push; Render deployed via CLI for the backend changes):**
+- **Load more always full:** `_browse_page` is now a top-up loop (≤10 rounds, ≥12 spare per round): titles TMDB lists
+  but whose provider data doesn't confirm a chosen service are dropped server-side (same test as the client:
+  channel family of any platform), failed TMDB pages are retried and never skipped, and the cursor advances over
+  everything examined. Pages are 60-64 (may run a few OVER; never short). `next` = offset + titles consumed.
+- **Phone cache:** `CACHE_MAX_BYTES` 1.2 MB / 4 entries; oversize lists are trimmed, not skipped (long Load-more
+  sessions survive an app relaunch). End of list → "That's everything"; failure → "Couldn't load more".
+- **Free-with-ads** (Channel 4 / ITVX / 5, type `ads`) now counts on cards, the "+N" popup, `classify`.
+- **UI:** results count animates up (`animateCount`, `#resCount`); Install button hidden when installed or on iOS;
+  page no longer scrolls behind the camera zone (`#app` is a fixed scroller below the 59px `#sf_topbar`).
+- **"If you like this, try…"** (v2.06): `GET /api/similar?tmdb_id&kind` (TMDB recommendations → similar fallback,
+  providers attached, 6h cache) → poster strip in the detail popup, ✓ on your services first, tap opens it with a
+  ← Back button (`_detailStack`).
+- **Rotten Tomatoes REMOVED** (scraping = against their ToS): scraper deleted, `_rt_lookup` is a no-op stub,
+  `rt_enabled=False`, `rt_on` forced False, RT UI/toggle/Serper box gone, `rtOn()` returns false. Ratings = TMDB only.
+- **Watchlist (v2.07)** — localStorage `sf_watchlist`; ☆ on cards + detail; header "📌 Watchlist". Popup has
+  "Which subscription?" (coverage bars per service, which service to ADD to unlock most, greedy minimum cover,
+  owned services covering nothing = "could pause", "🎉 Now on your services" alerts). `POST /api/providers`
+  refreshes where-to-watch for saved items (24h provider cache). No prices (free data has none).
+- **Watched list (v2.10/2.11)** — localStorage `sf_seen`; 👁 on cards + detail; marking removes from watchlist;
+  "Hide watched" checkbox (default ON, `sf_hide_seen`) filters client-side; unmark list inside the watchlist popup.
+  `fetchMorePages()` keeps fetching (≤4 pages) until ~50 unwatched cards are visible; first page tops itself up if <40.
+- **Commercial caveat (discussed):** TMDB free tier is non-commercial and requires JustWatch/TMDB attribution; selling
+  needs a commercial agreement (likely paid → conflicts with the no-paid rule; flag first). TVMaze needs attribution.
+
+**NEXT ideas (not started, none approved):** subscription price entry for a £ saving in "Which subscription?";
+Trakt/Letterboxd import for the watched list; watch-together taste overlap; "I have 90 min" + mood picker.
+Known: a stray `awaiting.postMessage` typo in the SW takeover code (index.html boot) is swallowed by try/catch.
+
+---
+
+## (older) STATE at v1.99 — 2026-10-02 evening (still accurate for the paging architecture below)
 
 **What changed today (short version):** service browses now PAGE STRAIGHT THROUGH TMDB (no 240
 pool). Netflix = the whole catalogue (~9,270), fast (2-5s/page on Render), sorted server-side.
@@ -47,7 +80,7 @@ check the run log. Mac keep-alive (launchd sf-keepalive.sh, 20 min) is a separat
 Verify after ANY backend change with the live curl recipes (use `curl -G`; household lens = 11
 `--data channel=…` args; in zsh use an array, not a string var).
 
-**NEXT (user-approved, NOT started): "you may also like…"** — in the detail popup, a row of
+**(DONE in v2.06) "you may also like…"** — in the detail popup, a row of
 recommended titles; clicking one opens ITS detail (same enrich flow, by tmdb_id). Plan: TMDB
 `/movie/{id}/recommendations` (+`/similar` fallback) and `/tv/{id}/recommendations` — free, already
 covered by the key; add to `/api/enrich` (or a light `/api/similar`), map with `_map_tmdb`, attach
