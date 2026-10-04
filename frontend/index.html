@@ -339,7 +339,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '2.14';
+const APP_VERSION = '2.15';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, total:0, loadingMore:false, checkedAt:null };
@@ -598,14 +598,15 @@ async function doSearch(opts){
   searchCtl = window.AbortController ? new AbortController() : null;
   // Fresh search → start from a small first page; "Load more" grows it from here.
   // (Page fetches — offset>0 — keep the running count and just append.)
-  if(!pageOffset){ state.loaded = 60; _freshSeq++; state.refillNext=state.refill||0; state.refill=0; }   // a first page is 60; show it all
+  if(!pageOffset){ state.loaded = 60; _freshSeq++; state.fetchSort=null; }   // a first page is 60; show it all
   // The "My services" lens: browse the pool of everything on the services you
   // have (all of them by default). A text search or a mood turns the lens off.
   const myCh = lensChannels();
   const p = new URLSearchParams();
   if(state.q) p.set('q', state.q);
   p.set('kind', state.kind);
-  if(state.sort!=='relevance') p.set('sort', state.sort);
+  const strSrvSort = state.fetchSort || state.sort;     // the order the SERVER pages in (a local re-sort doesn't change it)
+  if(strSrvSort!=='relevance') p.set('sort', strSrvSort);
   state.moods.forEach(m=>{ (META.moods.find(x=>x.mood===m)?.genres||[m]).forEach(g=>p.append('genres', g)); });
   if(state.yearMin) p.set('year_min', state.yearMin);
   if(state.yearMax) p.set('year_max', state.yearMax);
@@ -755,8 +756,7 @@ async function doSearch(opts){
   if(mySeq!==searchSeq){ stopProgress=true; return; }   // superseded (user chose a new load)
   if(!window.__backendDown) doSearch._retried = false;
   busy = false; render(false);
-  if(!pageOffset && state.refillNext>0) setTimeout(()=>refillNow(),50);
-  else if(!pageOffset && hideSeenOn() && getSeen().length && (state.poolTotal||0)<40) setTimeout(()=>loadMoreNow(),50);   // watched titles thinned the first page: top it up
+  if(!pageOffset && hideSeenOn() && getSeen().length && (state.poolTotal||0)<40) setTimeout(()=>loadMoreNow(),50);   // watched titles thinned the first page: top it up
   // The response's cast/provider data is a snapshot; the backend keeps enriching
   // the rest of the page. Keep polling so the remaining cards fill in — but SLOWLY
   // (it's background work now) and stop the moment a newer search takes over:
@@ -831,10 +831,10 @@ function sortResults(list, sort){
   };
   const RT   = r => r.ratings && r.ratings.rt_tomatometer;
   const AUD  = r => r.ratings && r.ratings.rt_audience;
-  const TMDB = r => r.ratings && r.ratings.tmdb_vote;
+  const TMDB = r => (r.ratings && (r.ratings.tmdb_count||0)>=50) ? r.ratings.tmdb_vote : null;   // ignore a 10/10 from a handful of votes
   const VOTE = r => (r.ratings && r.ratings.tmdb_count) || 0;
   const YEAR = r => r.year || 0;
-  const BLEND= r => { const x=r.ratings||{}; const v=[x.tmdb_vote, x.rt_tomatometer?x.rt_tomatometer/10:null].filter(n=>n!=null); return v.length? v.reduce((a,b)=>a+b,0)/v.length : null; };
+  const BLEND= r => TMDB(r);
   const T = r => (r.title||'').toLowerCase();
   out.sort((a,b)=>{
     switch(sort){
@@ -974,23 +974,6 @@ function loadMoreNow(){
   if(!pool.length || intNext >= total || state.loadingMore) return;
   fetchMorePages();
 }
-// After changing the sort order: the new order comes from the server (it covers the whole catalogue,
-// not just what's loaded), so rebuild the list to the SAME depth you had — top of the new order first,
-// the rest filling in underneath — instead of dropping back to one page.
-async function refillNow(){
-  const intTarget=state.refillNext||0; state.refillNext=0; if(!intTarget) return;
-  const intTok=_freshSeq; state.loadingMore=true; state.pageErr=false;
-  while(intTok===_freshSeq && (allResults||[]).length<intTarget){
-    const total=Math.min(state.total||0, state.limit||Infinity), intNext=state.nextOffset||0;
-    if(intNext>=total) break;
-    state.refillNote=`Re-sorting… ${(allResults||[]).length.toLocaleString()} of ${intTarget.toLocaleString()}`;
-    render(false);
-    const intBefore=(allResults||[]).length;
-    await Promise.resolve(doSearch({offset:intNext}));
-    if(intTok!==_freshSeq || state.pageErr || (allResults||[]).length===intBefore) break;
-  }
-  if(intTok===_freshSeq){ state.loadingMore=false; state.refillNote=''; render(false); }
-}
 // Fetch the next server page(s). With "Hide watched" on, hidden titles eat into a page, so keep
 // fetching (up to 4 pages) until about a page's worth of NEW cards is actually visible.
 async function fetchMorePages(){
@@ -1038,7 +1021,7 @@ function updateMoreBar(intShown, intTotal, blnMore, blnBusy){
     document.body.appendChild(el);
   }
   if(!blnMore && !blnBusy){ el.classList.add('hidden'); return; }
-  el.textContent = blnBusy ? (state.refillNote || `Loading more… (${intShown.toLocaleString()} of ${intTotal.toLocaleString()})`) : `Showing ${intShown.toLocaleString()} of ${intTotal.toLocaleString()} · Load more ▾`;
+  el.textContent = blnBusy ? `Loading more… (${intShown.toLocaleString()} of ${intTotal.toLocaleString()})` : `Showing ${intShown.toLocaleString()} of ${intTotal.toLocaleString()} · Load more ▾`;
   // The bar is for when the real Load more button is OUT of view. When that button is on
   // screen the bar hides, so the two never sit on top of each other.
   el.classList.remove('hidden');
@@ -1093,7 +1076,7 @@ function render(spinner){
   // oldest titles live past the page the backend sliced, so a pre-sorted first 100
   // would never surface them.) "Max results" then caps only the display; re-sorts
   // are instant local reshuffles of the stored set (no refetch).
-   const sorted = shown;   // server order (already sorted across the whole result set)
+   const sorted = (state.fetchSort && state.fetchSort!==state.sort) ? sortResults(shown, state.sort) : shown;   // re-sorted locally when the order was changed after loading
    // The pool we can page through: the full ranked/filtered set, capped to the
    // "Max results" setting (0 = All → no cap). This is the "total" for Load-more.
    const poolCap = state.limit || Infinity;
@@ -1239,7 +1222,14 @@ function render(spinner){
   $('#minRating')?.addEventListener('change',e=>{state.minRating=parseFloat(e.target.value)||0;doSearch();});
   // The server returns every page in the chosen order across the WHOLE result set, so a
   // sort change refetches from page 1 (cached per sort) instead of re-sorting what's loaded.
-  $('#sort')?.addEventListener('change',e=>{state.sort=e.target.value; const n=Math.min((allResults||[]).length,1200); state.refill=n>80?n:0; doSearch();});
+  $('#sort')?.addEventListener('change',e=>{
+    const strNew=e.target.value;
+    if((allResults||[]).length){        // reorder what is already loaded — instant, nothing is refetched
+      state.fetchSort = state.fetchSort || state.sort;   // Load more keeps paging in the order we fetched
+      state.sort = strNew; render(false); return;
+    }
+    state.sort=strNew; doSearch();
+  });
   // "Force refresh": ignore the phone cache and refetch this search from the server now.
   $('#refreshNow')?.addEventListener('click',()=>doSearch({force:true}));
   // "Load more": reveal the next batch of the already-fetched pool (instant, local);
