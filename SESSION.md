@@ -2,7 +2,7 @@
 
 Working notes so we can pick up where we left off. Not user-facing (that's README.md).
 
-## ⭐ CURRENT STATE — READ THIS FIRST (2026-10-04, v2.11 / sw shell-v83)
+## ⭐ CURRENT STATE — READ THIS FIRST (2026-10-04, v2.16 / sw shell-v88)
 
 **Done since v1.99 (all deployed: Pages auto on push; Render deployed via CLI for the backend changes):**
 - **Load more always full:** `_browse_page` is now a top-up loop (≤10 rounds, ≥12 spare per round): titles TMDB lists
@@ -29,7 +29,22 @@ Working notes so we can pick up where we left off. Not user-facing (that's READM
 - **Commercial caveat (discussed):** TMDB free tier is non-commercial and requires JustWatch/TMDB attribution; selling
   needs a commercial agreement (likely paid → conflicts with the no-paid rule; flag first). TVMaze needs attribution.
 
-**NEXT ideas (not started, none approved):** subscription price entry for a £ saving in "Which subscription?";
+**Added v2.12-v2.16 (all live; v2.13 also deployed to Render):**
+- **Actor popup (v2.12):** every credit is tappable (opens detail); `POST /api/providers` marks titles on your services
+  "✓ yours" and sorts them first. (Tapping closes the popup — no back-to-actor yet.) Detail fills a missing overview from enrich.
+- **Exact resume (v2.13):** `_browse_page` returns `cur` (per-lane positions); the client keeps it in `state.cursor`
+  and sends `cursor=` with Load more (`Query.cursor`, excluded from `_pool_key`). Works after a relaunch or Render
+  restart (only ~5 repeated titles at the seam; the client dedupes). curl needs `-g` when the cursor JSON has braces.
+- **Sort (v2.15):** changing sort re-orders the LOADED cards locally and instantly (`sortResults`); Load more keeps paging
+  in the original fetch order (`state.fetchSort`) and the whole list is re-sorted. Fresh searches use the new sort on
+  the server. 'rating'/'tmdb' ignore cards with <50 votes. (v2.14's refetch-to-same-depth was removed: too slow.)
+- **Saved results (v2.16):** moved from localStorage to IndexedDB (`sf_cache_db`, key prefix `sf_s2_`, 24h TTL, last 5
+  searches, no size trim). Key is NOT tied to APP_VERSION any more (it used to wipe the list on every release);
+  bump `CACHE_SCHEMA` only if the card shape changes. `readCache` has a 1.5s timeout so a hung IndexedDB can't stall
+  a search. User-confirmed: close/reopen restores the whole list.
+- Testing note: headless Chrome with `--virtual-time-budget` hangs IndexedDB; use real time (`--timeout`) for IDB tests.
+
+**NEXT ideas (not started, none approved):** back-to-actor button from a title opened via the actor popup; subscription price entry for a £ saving in "Which subscription?";
 Trakt/Letterboxd import for the watched list; watch-together taste overlap; "I have 90 min" + mood picker.
 Known: a stray `awaiting.postMessage` typo in the SW takeover code (index.html boot) is swallowed by try/catch.
 
