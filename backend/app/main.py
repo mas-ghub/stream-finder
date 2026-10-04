@@ -1591,10 +1591,11 @@ async def _browse_page(q: Query, prov_ids: list[int], pid: str | None) -> dict:
     kept: list[Result] = []
     seen_ids: set = {tuple(x) for x in recent}
     consumed = 0
-    for _round in range(5):
-        need = limit - len(kept)
-        if need <= 0:
+    for _round in range(10):
+        short = limit - len(kept)
+        if short <= 0:
             break
+        need = max(short, 12)      # top-up rounds pull a few spare so a page isn't a title short; it may run slightly over
         seg0_left = sum(max(0, totals[nm] - cur.get(nm, 0)) for nm, _, _, _, sg in lanes if sg == 0)
         wins = await asyncio.gather(*(window_of(nm, kd, path, prm, sg, seg0_left, need) for nm, kd, path, prm, sg in lanes))
         cand = [x for w in wins for x in w]
@@ -1625,7 +1626,7 @@ async def _browse_page(q: Query, prov_ids: list[int], pid: str | None) -> dict:
                               progress_key=pid, progress_phase="finishing", progress_total=len(batch),
                               results=batch, only_provided=True, snap_every=10)
         kept.extend(r for r in batch if on_service(r))
-    page_results = kept[:limit]
+    page_results = kept     # may be a few over `limit`: the cursor already moved past every title examined
     recent = recent[-_RECENT_IDS:]
     _CURSORS[f"{qkey}|{offset + consumed}"] = (time.time(), dict(cur), recent)
     while len(_CURSORS) > _CURSOR_MAX:
