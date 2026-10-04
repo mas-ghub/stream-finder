@@ -339,7 +339,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '2.10';
+const APP_VERSION = '2.11';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, total:0, loadingMore:false, checkedAt:null };
@@ -740,6 +740,7 @@ async function doSearch(opts){
   if(mySeq!==searchSeq){ stopProgress=true; return; }   // superseded (user chose a new load)
   if(!window.__backendDown) doSearch._retried = false;
   busy = false; render(false);
+  if(!pageOffset && hideSeenOn() && getSeen().length && (state.poolTotal||0)<40) setTimeout(()=>loadMoreNow(),50);   // watched titles thinned the first page: top it up
   // The response's cast/provider data is a snapshot; the backend keeps enriching
   // the rest of the page. Keep polling so the remaining cards fill in — but SLOWLY
   // (it's background work now) and stop the moment a newer search takes over:
@@ -955,19 +956,32 @@ function loadMoreNow(){
   const total = Math.min(state.total || 0, cap);
   const intNext = state.nextOffset || pool.length;       // the server's own position, not our card count
   if(!pool.length || intNext >= total || state.loadingMore) return;
-  const intBefore = pool.length;
+  fetchMorePages();
+}
+// Fetch the next server page(s). With "Hide watched" on, hidden titles eat into a page, so keep
+// fetching (up to 4 pages) until about a page's worth of NEW cards is actually visible.
+async function fetchMorePages(){
+  const intWant = (hideSeenOn() && getSeen().length) ? 50 : 1;
   state.loadingMore = true; state.pageErr = false; render(false);
-  Promise.resolve(doSearch({offset: intNext})).finally(()=>{
-    state.loadingMore=false;
-    const intAdded = (allResults||[]).length - intBefore;
-    if(intAdded>0) showToast(`+${intAdded} loaded`);
-    else if(!state.pageErr){                         // the server answered but had nothing left to show: that's the end
-      state.total = (allResults||[]).length;
-      showToast("That's everything — no more titles");
-    }
-    else showToast("Couldn't load more — tap Load more to retry");
+  const intVisStart = state.poolTotal || 0, intLenStart = (allResults||[]).length;
+  let blnEnd = false;
+  for(let intTry=0; intTry<4; intTry++){
+    const total = Math.min(state.total || 0, state.limit || Infinity);
+    const intNext = state.nextOffset || (allResults||[]).length;
+    if(intNext >= total) break;
+    const intBefore = (allResults||[]).length;
+    await Promise.resolve(doSearch({offset: intNext}));
+    if(state.pageErr) break;
+    if((allResults||[]).length === intBefore){ blnEnd = true; break; }   // answered, nothing left to show
     render(false);
-  });
+    if((state.poolTotal||0) - intVisStart >= intWant) break;
+  }
+  state.loadingMore = false;
+  const intAdded = (allResults||[]).length - intLenStart, intVis = (state.poolTotal||0) - intVisStart;
+  if(intAdded>0) showToast(`+${intVis} loaded${intVis<intAdded?` (${intAdded-intVis} watched hidden)`:''}`);
+  else if(blnEnd){ state.total = (allResults||[]).length; showToast("That's everything — no more titles"); }
+  else if(state.pageErr) showToast("Couldn't load more — tap Load more to retry");
+  render(false);
 }
 
 let _toastTimer=0;
