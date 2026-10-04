@@ -1997,6 +1997,40 @@ async def enrich(payload: dict):
     return base.to_dict()
 
 
+_SIMILAR_CACHE: dict[str, tuple[float, list]] = {}
+_SIMILAR_TTL = 6 * 3600
+
+
+@app.get("/api/similar")
+async def similar(tmdb_id: int, kind: str = "movie"):
+    """'You may also like': TMDB recommendations for a title (similar as a fallback), each
+    with where-to-watch chips so the app can mark the ones on the user's services."""
+    ck = f"{kind}|{tmdb_id}"
+    hit = _SIMILAR_CACHE.get(ck)
+    if hit and time.time() - hit[0] < _SIMILAR_TTL:
+        return {"results": hit[1]}
+    if not (tmdb_key() or tmdb_v4_key()):
+        return {"results": []}
+    items: list[dict] = []
+    for ep in ("recommendations", "similar"):
+        try:
+            d = (await _tmdb_get(f"{TMDB_BASE}/{_tpath(kind)}/{tmdb_id}/{ep}", {"page": 1})).json()
+        except Exception as e:  # noqa: BLE001
+            log.debug("tmdb %s failed: %s", ep, e)
+            continue
+        have = {it["id"] for it in items}
+        items += [it for it in d.get("results", []) if it.get("id") not in have and it.get("poster_path")]
+        if len(items) >= 12:
+            break
+    res = [_map_tmdb(it, "show" if kind == "show" else "movie") for it in items[:14]]
+    await _gather_bounded([_attach_providers(r) for r in res], 8)
+    out = [r.to_dict() for r in res]
+    _SIMILAR_CACHE[ck] = (time.time(), out)
+    while len(_SIMILAR_CACHE) > 200:
+        _SIMILAR_CACHE.pop(next(iter(_SIMILAR_CACHE)))
+    return {"results": out}
+
+
 @app.get("/api/person/{person_id}")
 async def person(person_id: int):
     """A person's filmography (for the clickable-cast → their films/shows popup)."""

@@ -335,7 +335,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '2.05';
+const APP_VERSION = '2.06';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, total:0, loadingMore:false, checkedAt:null };
@@ -1238,13 +1238,15 @@ function showSubs(btn){
 }
 
 // ---------- detail modal ----------
-function openDetail(title, kind){
-  const r = allResults && (allResults.find(x=>x.title===title && x.kind===kind) || allResults.find(x=>x.title===title));
+var _detailStack=[];     // titles we came from via "You may also like" (for the Back button)
+function openDetail(title, kind, rObj, blnFromSimilar){
+  const r = rObj || (allResults && (allResults.find(x=>x.title===title && x.kind===kind) || allResults.find(x=>x.title===title)));
   if(!r) return;
+  if(!blnFromSimilar) _detailStack=[];
   const m=$('#modal');
   m.innerHTML = `<div class="fixed inset-0 z-50 overflow-y-auto overscroll-contain" style="padding-top:59px;-webkit-overflow-scrolling:touch"><div class="absolute bg-black/80 backdrop-blur-sm" style="position:fixed;inset:0"></div><div class="relative min-h-full flex items-center justify-center p-4 pb-24" data-close>
     <div class="relative z-10 w-full max-w-3xl rounded-2xl border border-line bg-ink overflow-hidden fade">
-      <div class="relative h-56 md:h-72" style="${posterBg(r)}"><button class="absolute top-3 right-3 z-10 w-9 h-9 rounded-full bg-black/60 text-white/80 hover:bg-black/80" data-x>✕</button></div>
+      <div class="relative h-56 md:h-72" style="${posterBg(r)}">${_detailStack.length?'<button class="absolute top-3 left-3 z-10 px-3 h-9 rounded-full bg-black/60 text-white text-sm font-semibold" data-back>← Back</button>':''}<button class="absolute top-3 right-3 z-10 w-9 h-9 rounded-full bg-black/60 text-white/80 hover:bg-black/80" data-x>✕</button></div>
       <div id="detailBody" class="p-5 md:p-7 -mt-16 relative" style="background:var(--c-panel)">
         <div class="text-onsub text-xs uppercase tracking-widest">${r.kind==='movie'?'Film':'Series'}</div>
         <h2 class="text-3xl font-black mt-1">${esc(r.title)}</h2>
@@ -1256,14 +1258,17 @@ function openDetail(title, kind){
         <div class="mt-3 flex flex-wrap gap-2">${ratingBadges(r)||''}</div>
         <div class="mt-5 text-onfg leading-relaxed" style="opacity:.9">${esc(r.overview)||'<span class="text-onmute">No synopsis.</span>'}</div>
         <div class="mt-5"><div class="text-xs uppercase tracking-widest text-onmute mb-2">Where to watch <span class="normal-case tracking-normal opacity-70">(UK)</span></div><div id="watchRow" class="flex flex-wrap gap-1.5">${(r.platforms&&r.platforms.length)?watchRow(r.platforms):'<span class="text-onmute text-sm">Checking availability…</span>'}</div></div>
+        ${r.tmdb_id?'<div id="simBox" class="mt-5 hidden"><div class="text-xs uppercase tracking-widest text-onmute mb-2">If you like this, try… <span class="normal-case tracking-normal opacity-70">— ✓ = on your services</span></div><div id="simRow" class="flex gap-2 overflow-x-auto pb-2" style="-webkit-overflow-scrolling:touch"></div></div>':''}
         ${(r.cast&&r.cast.length)?`<div class="mt-5"><div class="text-xs uppercase tracking-widest text-onmute mb-2">Cast <span class="normal-case tracking-normal opacity-70">— tap a name for their films</span></div><div class="flex flex-wrap gap-2" id="castRow">${(r.cast_full||[]).slice(0,10).map((c,i)=>`<button data-pid="${c.person_id||''}" data-name="${esc(c.name)}" class="chip px-3 py-1 rounded-full text-sm cursor-pointer hoverable">${esc(c.name)}</button>`).join('')||(r.cast.slice(0,10).map(c=>`<span class="chip px-3 py-1 rounded-full text-sm">${esc(c)}</span>`).join(''))}</div></div>`:''}
         ${r.trailer_url?`<div class="mt-6"><div class="text-xs uppercase tracking-widest text-onmute mb-2">Trailer</div><div class="aspect-video rounded-xl overflow-hidden border border-line"><iframe class="w-full h-full" src="${esc(r.trailer_url)}?autoplay=1&rel=0" allow="autoplay; encrypted-media" allowfullscreen></iframe></div></div>`:''}
         ${r.external_url?`<div class="mt-6"><a href="${esc(r.external_url)}" target="_blank" rel="noopener" class="inline-flex items-center gap-2 field hoverable border border-line px-4 py-2.5 rounded-xl text-sm">Open full details ↗</a></div>`:''}
       </div>
     </div></div></div>`;
-  const close=()=>{m.innerHTML='';window.removeEventListener('keydown',esc2);};
+  const close=()=>{m.innerHTML='';_detailStack=[];window.removeEventListener('keydown',esc2);};
   const esc2=e=>{if(e.key==='Escape')close();};
   m.querySelector('[data-x]').onclick=close;
+  const bk=m.querySelector('[data-back]');
+  if(bk) bk.onclick=e=>{ e.stopPropagation(); window.removeEventListener('keydown',esc2); const prev=_detailStack.pop(); openDetail(prev.title, prev.kind, prev, true); };
   m.querySelector('[data-close]').onclick=e=>{if(e.target.dataset.close)close();};
   window.addEventListener('keydown',esc2);
   // enrich: always fetch where-to-watch + fuller ratings/trailer/cast
@@ -1296,6 +1301,18 @@ function openDetail(title, kind){
       div.querySelector('#castRow').innerHTML=(fr.cast_full&&fr.cast_full.length?fr.cast_full:fr.cast).map(c=>c.person_id?`<button data-pid="${c.person_id}" data-name="${esc(c.name)}" class="chip px-3 py-1 rounded-full text-sm cursor-pointer hoverable">${esc(c.name)}</button>`:`<span class="chip px-3 py-1 rounded-full text-sm">${esc(c)}</span>`).join('');
     }
   });
+  // "If you like this, try…": TMDB recommendations; ✓ marks the ones on the user's services.
+  if(r.tmdb_id){
+    fetch(`${API}/api/similar?tmdb_id=${r.tmdb_id}&kind=${r.kind}`,{headers:tmdbHeaders()}).then(x=>x.json()).then(d=>{
+      const lst=(d.results||[]); const box=document.getElementById('simBox'), row=document.getElementById('simRow');
+      if(!box||!row||!lst.length) return;
+      lst.sort((a,b)=>(classify(b.platforms).status==='free')-(classify(a.platforms).status==='free'));
+      row.innerHTML=lst.map((x,ix)=>{ const on=classify(x.platforms).status==='free';
+        return `<button data-sim="${ix}" class="shrink-0 w-24 text-left"><div class="relative aspect-[2/3] rounded-lg overflow-hidden border ${on?'border-green-500':'border-line'}" style="background:#1b2436 url('${esc(x.poster_url||'')}') center/cover">${on?'<span class="absolute top-1 left-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-green-600 text-white">✓ yours</span>':''}</div><div class="text-[11px] font-semibold leading-tight mt-1 line-clamp-2">${esc(x.title)}</div><div class="text-[10px] text-onsub">${x.year||''}</div></button>`; }).join('');
+      box.classList.remove('hidden');
+      row.onclick=e=>{ const b=e.target.closest('[data-sim]'); if(!b) return; e.stopPropagation(); window.removeEventListener('keydown',esc2); _detailStack.push(r); openDetail(null, null, lst[+b.dataset.sim], true); };
+    }).catch(()=>{});
+  }
   // delegated: tapping any cast name opens their filmography
   m.querySelector('#detailBody')?.addEventListener('click', e=>{
     const b = e.target.closest('[data-pid]');
