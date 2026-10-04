@@ -70,7 +70,11 @@ tailwind.config = {
      /* The fixed notch bar. Opaque so scrolled content never shows through. */
      #sf_topbar{position:fixed;top:0;left:0;right:0;height:59px;z-index:80;background:var(--c-ink);box-shadow:0 1px 0 var(--c-line);}
      /* Content starts below the fixed bar. */
-     #app{padding-top:59px;}
+     /* The app scrolls INSIDE its own box that starts below the fixed bar, and the page itself
+        never scrolls — so nothing can slide up into the camera/status-bar zone at all. */
+     html,body{overflow:hidden;}
+     #app{position:fixed;top:max(59px,env(safe-area-inset-top,0px));bottom:0;left:0;right:0;margin:0 auto;
+          overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;}
   #app,#app>header,#app>section,#app>.mt-5{background:transparent;}
   #app{background-color:var(--c-ink);}
   .card-poster{background-size:cover;background-position:center top;transition:transform .25s ease, box-shadow .25s ease;}
@@ -335,7 +339,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '2.07';
+const APP_VERSION = '2.08';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, total:0, loadingMore:false, checkedAt:null };
