@@ -335,7 +335,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '2.03';
+const APP_VERSION = '2.04';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, total:0, loadingMore:false, checkedAt:null };
@@ -638,7 +638,7 @@ async function doSearch(opts){
   }
   // A FRESH search (sort/filter/service change) must not inherit the previous search's cards —
   // they were ranked differently and would be mixed in after the new ones. (Load more keeps them.)
-  if(!pageOffset){ allResults = null; state.nextOffset = 0; state.pageNote=''; }
+  if(!pageOffset){ allResults = null; state.nextOffset = 0; _countShown = 0; }
   busy = true; render(true);
   // When Rotten Tomatoes is ON (a per-person choice), the "Reading ratings" step is
   // the slow one — say so explicitly so the longer wait looks intentional, not stuck.
@@ -695,7 +695,6 @@ async function doSearch(opts){
     if(pageOffset){
       const seen=new Set(prev.map(key));
       allResults=[...prev, ...(d.results||[]).filter(r=>!seen.has(key(r)))];
-      state.lastPage={sent:(d.results||[]).length, fresh:allResults.length-prev.length};
     }else{
       const seen=new Set((d.results||[]).map(key));
       allResults=[...(d.results||[]), ...prev.filter(r=>!seen.has(key(r)))];
@@ -943,18 +942,12 @@ function loadMoreNow(){
   const total = Math.min(state.total || 0, cap);
   const intNext = state.nextOffset || pool.length;       // the server's own position, not our card count
   if(!pool.length || intNext >= total || state.loadingMore) return;
-  const intBefore = pool.length, intVisBefore = state.poolTotal||0;
+  const intBefore = pool.length;
   state.loadingMore = true; state.pageErr = false; render(false);
   Promise.resolve(doSearch({offset: intNext})).finally(()=>{
     state.loadingMore=false;
     const intAdded = (allResults||[]).length - intBefore;
-    if(intAdded>0){
-      render(false);
-      const lp=state.lastPage||{sent:intAdded,fresh:intAdded}, intVis=(state.poolTotal||0)-intVisBefore;
-      const strWhy=(lp.sent!==intVis)?` (server sent ${lp.sent}${lp.sent-lp.fresh?`, ${lp.sent-lp.fresh} repeats`:''}${lp.fresh-intVis?`, ${lp.fresh-intVis} hidden by filter`:''})`:'';
-      state.pageNote=`v${APP_VERSION} · last add +${intVis}${strWhy}`;
-      showToast(`+${intVis} loaded${strWhy} · ${(state.poolTotal||0).toLocaleString()} of ${total.toLocaleString()}`);
-    }
+    if(intAdded>0) showToast(`+${intAdded} loaded`);
     else if(!state.pageErr){                         // the server answered but had nothing left to show: that's the end
       state.total = (allResults||[]).length;
       showToast("That's everything — no more titles");
@@ -979,13 +972,13 @@ function updateMoreBar(intShown, intTotal, blnMore, blnBusy){
   if(!el){
     el=document.createElement('button'); el.id='moreBar';
     // Big, centred tap target; see-through (with blur) so the cards underneath stay visible.
-    el.className='fixed left-1/2 -translate-x-1/2 z-50 text-white text-base font-bold rounded-3xl px-8 py-3 shadow-xl whitespace-pre text-center';
+    el.className='fixed left-1/2 -translate-x-1/2 z-50 text-white text-base font-bold rounded-full px-8 py-4 shadow-xl whitespace-nowrap';
     el.style.cssText='bottom:calc(env(safe-area-inset-bottom,0px) + 16px);background:rgba(229,9,20,.78);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);border:1px solid rgba(255,255,255,.35);';
     el.addEventListener('click',loadMoreNow);
     document.body.appendChild(el);
   }
   if(!blnMore && !blnBusy){ el.classList.add('hidden'); return; }
-  el.textContent = blnBusy ? `Loading more… (${intShown.toLocaleString()} of ${intTotal.toLocaleString()})` : `Showing ${intShown.toLocaleString()} of ${intTotal.toLocaleString()} · Load more ▾` + (state.pageNote?`\n${state.pageNote}`:'');
+  el.textContent = blnBusy ? `Loading more… (${intShown.toLocaleString()} of ${intTotal.toLocaleString()})` : `Showing ${intShown.toLocaleString()} of ${intTotal.toLocaleString()} · Load more ▾`;
   // The bar is for when the real Load more button is OUT of view. When that button is on
   // screen the bar hides, so the two never sit on top of each other.
   el.classList.remove('hidden');
@@ -997,6 +990,22 @@ function updateMoreBar(intShown, intTotal, blnMore, blnBusy){
   }
 }
 var _moreObs=null;
+// Count-up for the "N results" figure at the top: eases from the last number shown to the new one.
+var _countShown=0, _countRaf=0;
+function animateCount(){
+  cancelAnimationFrame(_countRaf);
+  const el=document.getElementById('resCount'); if(!el) return;
+  const intTo=+el.dataset.n, intFrom=_countShown;
+  if(!(intTo>intFrom)){ _countShown=intTo; return; }        // new search / fewer results: just show it
+  if(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches){ _countShown=intTo; return; }
+  const t0=performance.now(), dur=Math.min(900, 300+(intTo-intFrom)*6);
+  const step=now=>{
+    const f=Math.min(1,(now-t0)/dur), v=Math.round(intFrom+(intTo-intFrom)*(1-Math.pow(1-f,3)));
+    _countShown=v; const e=document.getElementById('resCount'); if(e) e.textContent=v.toLocaleString();
+    if(f<1) _countRaf=requestAnimationFrame(step); else _countShown=intTo;
+  };
+  _countRaf=requestAnimationFrame(step);
+}
 
 function render(spinner){
   const tmdbOn = META.sources.find(s=>s.key==='tmdb')?.configured || META._tmdbKey;
@@ -1111,7 +1120,7 @@ function render(spinner){
 
   ${spinner?`<div class="mt-5 flex items-center gap-3"><div class="loadbar flex-1"></div><span id="progStatus" class="text-xs text-onsub tabular-nums">${allResults&&allResults.length?'Filling in — browse as they land…':'Searching…'}</span></div>`:''}
   <div class="flex items-center justify-between mt-5 mb-3 flex-wrap gap-2">
-    <h2 class="text-base font-semibold text-onsub">${spinner?(allResults&&allResults.length?`Filling in… <span class="text-accent">${shown.length}</span> so far`:'Searching…'):`<span class="text-accent">${shown.length}</span> results${state.q?` for “${esc(state.q)}”`:''}${!subs.length?'':myServicesOn?` · your services`:myCh.length?` · ${myCh.length} service${myCh.length>1?'s':''}`:''}${state.streamOnly?' · you can stream':''}${state.freeOnly?' · free only':''}${state.englishOnly?' · English only':''}`}</h2>
+    <h2 class="text-base font-semibold text-onsub">${spinner?(allResults&&allResults.length?`Filling in… <span class="text-accent">${shown.length}</span> so far`:'Searching…'):`<span id="resCount" data-n="${shown.length}" class="text-accent tabular-nums">${shown.length}</span> results${state.q?` for “${esc(state.q)}”`:''}${!subs.length?'':myServicesOn?` · your services`:myCh.length?` · ${myCh.length} service${myCh.length>1?'s':''}`:''}${state.streamOnly?' · you can stream':''}${state.freeOnly?' · free only':''}${state.englishOnly?' · English only':''}`}</h2>
     ${spinner?'':`<label class="flex items-center gap-2 text-xs cursor-pointer select-none">
       <span class="text-onmute uppercase tracking-wide text-[11px]">Sort by</span>
        <select id="sort" class="field border border-line rounded-lg px-2.5 py-1.5 text-xs">
@@ -1142,6 +1151,7 @@ function render(spinner){
      <button id="loadMore" class="bg-panel2 hover:bg-panel border border-line rounded-xl px-6 py-2.5 text-sm font-semibold text-onsub">${state.loadingMore?'Loading…':'Load more'} <span class="text-onmute">${state.loadingMore?'':(pool.length - nShown > 0 ? `(${pool.length - nShown} ready)` : `(${Math.max(0, Math.min(state.total||0, poolCap===Infinity?state.total||0:poolCap) - pool.length)} more on the server)`)}</span></button>
    </div>` : ''}`;
   updateMoreBar(nShown, Math.max(Math.min(state.total||0, poolCap===Infinity?(state.total||0):poolCap), pool.length), !spinner && subs.length>0 && hasMore, !!state.loadingMore);
+  animateCount();
   if(_qFocus){ const q=document.getElementById('q'); if(q){ q.value=state.q; q.focus({preventScroll:true}); try{ q.setSelectionRange(_qS,_qE); }catch(e){} } }
 
   // wire events
