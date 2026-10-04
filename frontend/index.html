@@ -335,7 +335,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&g
 
 // Bump when you change the app — shown (faintly) top-right so you know you're on the
 // latest after a reload. Keep it short.
-const APP_VERSION = '1.99';
+const APP_VERSION = '2.00';
 
 let META = { moods:[], genres:[], sources:[], channels:[] };
 let state = { q:'', kind:'any', moods:[], genres:[], channels:[], yearMin:'', yearMax:'', minRating:0, minRt:0, sort:'relevance', limit:100, streamOnly:false, freeOnly:false, englishOnly:false, rtOn:rtOn(), loaded:40, loadedBase:0, poolTotal:0, total:0, loadingMore:false, checkedAt:null };
@@ -436,8 +436,8 @@ function setLimit(v){ try{ localStorage.setItem('sf_max_results', String(v===0?0
 // can never grow without limit; a quota error just silently skips caching (never fatal).
 const CACHE_PREFIX = 'sf_c' + APP_VERSION + '_';   // versioned: each release starts with a clean results cache
 const CACHE_TTL = 24 * 3600 * 1000;   // 24h — matches the backend's provider cache window
-const CACHE_MAX = 6;                  // keep the most recent N searches
-const CACHE_MAX_BYTES = 300 * 1024;   // skip a single oversized ("All") page
+const CACHE_MAX = 4;                  // keep the most recent N searches
+const CACHE_MAX_BYTES = 1200 * 1024;  // a long Load-more session must survive an app relaunch
 function cacheKeyFor(params){
   const q = new URLSearchParams(params);
   q.delete('progress_id');            // unique per search — must not be part of the key
@@ -461,8 +461,14 @@ function pruneCache(){
   ks.slice(0, ks.length-CACHE_MAX).forEach(k=>{ try{ localStorage.removeItem(k); }catch(e){} });
 }
 function writeCache(key, results, total, next){
-  const blob = JSON.stringify({ _t: Date.now(), results: results || [], total: total || (results||[]).length, next: next || (results||[]).length });
-  if(blob.length > CACHE_MAX_BYTES) return;   // too big to store safely — skip
+  let arrRes = results || [], intNext = next || arrRes.length;
+  let blob = JSON.stringify({ _t: Date.now(), results: arrRes, total: total || arrRes.length, next: intNext });
+  if(blob.length > CACHE_MAX_BYTES){           // too big: keep the first cards that fit (next = what we kept)
+    arrRes = arrRes.slice(0, Math.max(60, Math.floor(arrRes.length * CACHE_MAX_BYTES / blob.length * 0.9)));
+    intNext = arrRes.length;
+    blob = JSON.stringify({ _t: Date.now(), results: arrRes, total: total || arrRes.length, next: intNext });
+    if(blob.length > CACHE_MAX_BYTES) return;
+  }
   try{ localStorage.setItem(key, blob); pruneCache(); }
   catch(e){                                   // quota error → drop the oldest entry, retry once
     try{
@@ -710,7 +716,7 @@ async function doSearch(opts){
     console.warn(e);
     // A "load more" page fetch failing must NOT wipe the screen: keep the cards that
     // are already there and put the button back so it can be tapped again.
-    if(pageOffset){ state.loadingMore=false; render(false); return; }
+    if(pageOffset){ state.pageErr=true; state.loadingMore=false; render(false); return; }
     // One silent retry (fresh connection, re-resolve backend) before showing the banner:
     // a transient network blip / waking Mac shouldn't greet the user with an error.
     if(!doSearch._retried){
@@ -937,12 +943,16 @@ function loadMoreNow(){
   const intNext = state.nextOffset || pool.length;       // the server's own position, not our card count
   if(!pool.length || intNext >= total || state.loadingMore) return;
   const intBefore = pool.length;
-  state.loadingMore = true; render(false);
+  state.loadingMore = true; state.pageErr = false; render(false);
   Promise.resolve(doSearch({offset: intNext})).finally(()=>{
     state.loadingMore=false;
     const intAdded = (allResults||[]).length - intBefore;
     if(intAdded>0) showToast(`+${intAdded} loaded · ${(allResults||[]).length.toLocaleString()} of ${total.toLocaleString()}`);
-    else showToast('No more results came back — try Load more again');
+    else if(!state.pageErr){                         // the server answered but had nothing left to show: that's the end
+      state.total = (allResults||[]).length;
+      showToast("That's everything — no more titles");
+    }
+    else showToast("Couldn't load more — tap Load more to retry");
     render(false);
   });
 }

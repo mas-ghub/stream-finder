@@ -1557,12 +1557,17 @@ async def _browse_page(q: Query, prov_ids: list[int], pid: str | None) -> dict:
                 cur[nm] = round(take * t / tot)
             left -= take
     sk = _browse_sort_key(q.sort)
-    seg0_left = sum(max(0, totals[nm] - cur.get(nm, 0)) for nm, _, _, _, sg in lanes if sg == 0)
+    want = {channel_family(c) for c in q.channels}
+    gnames = {g.lower() for g in list(q.genres) + (genres_for_mood(q.mood) if q.mood else [])}
 
-    async def window_of(name, kind, path, prm, seg):
-        if seg == 1 and seg0_left > limit:
+    def on_service(r: Result) -> bool:
+        # Same test the client applies, so a card the server returns is a card the client shows.
+        return any(channel_family(p.get("channel")) in want for p in (r.platforms or []) if p.get("channel"))
+
+    async def window_of(name, kind, path, prm, seg, seg0_left, need):
+        if seg == 1 and seg0_left > need:
             return []          # the well-voted lanes still fill this page: don't touch the rest yet
-        a, b = cur.get(name, 0), min(cur.get(name, 0) + limit + _WINDOW_EXTRA, totals[name])
+        a, b = cur.get(name, 0), min(cur.get(name, 0) + need + _WINDOW_EXTRA, totals[name])
         if b <= a:
             return []
         pnums = [n for n in range(a // 20 + 1, (b - 1) // 20 + 2) if n <= _TMDB_MAX_PAGE]
@@ -1570,46 +1575,67 @@ async def _browse_page(q: Query, prov_ids: list[int], pid: str | None) -> dict:
         out = []
         for n, d in zip(pnums, datas):
             if isinstance(d, Exception):
-                log.debug("browse page raised %s", d)
-                continue
+                try:
+                    d = await page(path, prm, n)       # one retry (rate limit / blip)
+                except Exception as exc:  # noqa: BLE001
+                    log.debug("browse page raised %s", exc)
+                    break       # stop here: never advance the cursor past a page we couldn't read
             for i, it in enumerate(d.get("results", [])):
                 if a <= (n - 1) * 20 + i < b:
                     out.append((name, kind, seg, it))
         return out
-    wins = await asyncio.gather(*(window_of(nm, kd, path, prm, sg) for nm, kd, path, prm, sg in lanes))
-    cand = [x for w in wins for x in w]
-    cand.sort(key=lambda t: (t[2],) + tuple(sk(t[3])))
-    taken: list[tuple[str, dict]] = []
+
+    # Fill the page: titles TMDB lists but whose provider data doesn't confirm one of the
+    # chosen services (rent/buy-only, lookup failed) are dropped, so keep pulling until the
+    # page is full or the lanes run dry. The cursor advances over everything consumed.
+    kept: list[Result] = []
     seen_ids: set = {tuple(x) for x in recent}
-    used = {nm: 0 for nm in names_l}
-    for nm, kd, sg, it in cand:
-        if len(taken) >= limit:
+    consumed = 0
+    for _round in range(5):
+        need = limit - len(kept)
+        if need <= 0:
             break
-        used[nm] += 1
-        if (it.get("id"), kd) in seen_ids:
-            continue
-        seen_ids.add((it.get("id"), kd))
-        taken.append((kd, it))
-    recent = (recent + [[it.get("id"), kd] for kd, it in taken])[-_RECENT_IDS:]
-    _CURSORS[f"{qkey}|{offset + len(taken)}"] = (time.time(), {nm: cur.get(nm, 0) + used[nm] for nm in used}, recent)
+        seg0_left = sum(max(0, totals[nm] - cur.get(nm, 0)) for nm, _, _, _, sg in lanes if sg == 0)
+        wins = await asyncio.gather(*(window_of(nm, kd, path, prm, sg, seg0_left, need) for nm, kd, path, prm, sg in lanes))
+        cand = [x for w in wins for x in w]
+        if not cand:
+            break
+        cand.sort(key=lambda t: (t[2],) + tuple(sk(t[3])))
+        taken: list[tuple[str, dict]] = []
+        used = {nm: 0 for nm in names_l}
+        for nm, kd, sg, it in cand:
+            if len(taken) >= need:
+                break
+            used[nm] += 1
+            if (it.get("id"), kd) in seen_ids:
+                continue
+            seen_ids.add((it.get("id"), kd))
+            recent.append([it.get("id"), kd])
+            taken.append((kd, it))
+        for nm in used:
+            cur[nm] = cur.get(nm, 0) + used[nm]
+        consumed += sum(used.values())
+        batch = [_map_tmdb(it, k) for k, it in taken]
+        if gnames:
+            for r in batch:
+                r.genres.sort(key=lambda g: g.lower() not in gnames)
+        if pid:
+            _progress(pid, phase="finishing", done=0, total=len(batch))
+        await _gather_bounded([_attach_providers(r) for r in batch], 16,
+                              progress_key=pid, progress_phase="finishing", progress_total=len(batch),
+                              results=batch, only_provided=True, snap_every=10)
+        kept.extend(r for r in batch if on_service(r))
+    page_results = kept[:limit]
+    recent = recent[-_RECENT_IDS:]
+    _CURSORS[f"{qkey}|{offset + consumed}"] = (time.time(), dict(cur), recent)
     while len(_CURSORS) > _CURSOR_MAX:
         _CURSORS.pop(next(iter(_CURSORS)))
-    page_results = [_map_tmdb(it, k) for k, it in taken]
-    names = {g.lower() for g in list(q.genres) + (genres_for_mood(q.mood) if q.mood else [])}
-    if names:
-        for r in page_results:
-            r.genres.sort(key=lambda g: g.lower() not in names)
-    if pid:
-        _progress(pid, phase="finishing", done=0, total=len(page_results))
-    await _gather_bounded([_attach_providers(r) for r in page_results], 16,
-                          progress_key=pid, progress_phase="finishing", progress_total=len(page_results),
-                          results=page_results, only_provided=True, snap_every=10)
     if pid:
         PROGRESS.pop(pid, None)
     # `next` = where the following page starts in the server's own ordering. The client must
     # use this (not its own card count, which loses cards to de-duplication).
     return {"results": [r.to_dict() for r in page_results], "count": len(page_results), "total": grand,
-            "next": offset + len(taken)}
+            "next": offset + consumed}
 
 
 def _cancel_on_disconnect(fn):
